@@ -1,0 +1,29 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets and local environment files
+.env
+.env.*
+!.env.example
+
+# Database
+tracker.db
+
+# IDE / tooling
+.claude/
+.vscode/
+
+# Artifacts
+artifacts/
+
+# Large unrelated files
+.github/skills/
+full_transcript_*.txt
