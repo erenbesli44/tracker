@@ -24,6 +24,7 @@ from src.ingestion.schemas import (
     IngestionActionResponse,
     IngestionClassificationInput,
     IngestionSummaryInput,
+    IngestionTranscriptInput,
     IngestionYoutubeChannelRunRequest,
     IngestionYoutubeChannelRunResponse,
     IngestionYoutubeChannelRunVideoResult,
@@ -704,17 +705,42 @@ def _resolve_video(
     return created, "created"
 
 
-def _apply_transcript(session: Session, data: IngestionYoutubeRequest, video):
+def _resolve_transcript_input(data: IngestionYoutubeRequest) -> IngestionTranscriptInput:
+    """Return the transcript from the request, or auto-fetch it from YouTube."""
+    if data.transcript is not None:
+        return data.transcript
+
+    video_id = videos_service.extract_youtube_id(data.video.video_url)
+    if not video_id:
+        raise InvalidYouTubeUrl()
+
+    try:
+        fetched = videos_service.fetch_transcript_from_youtube(
+            video_id, data.transcript_languages
+        )
+    except videos_service.YouTubeTranscriptFetchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Could not fetch transcript from YouTube: {exc.detail}",
+        ) from exc
+
+    return IngestionTranscriptInput(
+        raw_text=fetched["full_text"],
+        language=str(fetched.get("language", "tr")),
+    )
+
+
+def _apply_transcript(session: Session, transcript_input: IngestionTranscriptInput, video, *, overwrite: bool):
     transcript = videos_service.get_transcript(session, video.id)
 
     if transcript:
-        if not data.overwrite.transcript:
+        if not overwrite:
             raise TranscriptAlreadyExists()
         updated = videos_service.update_transcript(
             session,
             transcript,
-            raw_text=data.transcript.raw_text,
-            language=data.transcript.language,
+            raw_text=transcript_input.raw_text,
+            language=transcript_input.language,
         )
         return updated, "updated"
 
@@ -722,8 +748,8 @@ def _apply_transcript(session: Session, data: IngestionYoutubeRequest, video):
         session,
         video,
         TranscriptCreate(
-            raw_text=data.transcript.raw_text,
-            language=data.transcript.language,
+            raw_text=transcript_input.raw_text,
+            language=transcript_input.language,
         ),
     )
     return created, "created"
@@ -989,7 +1015,10 @@ def _ingest_youtube_pipeline(
         video_metadata,
     )
 
-    transcript, transcript_action = _apply_transcript(session, data, video)
+    transcript_input = _resolve_transcript_input(data)
+    transcript, transcript_action = _apply_transcript(
+        session, transcript_input, video, overwrite=data.overwrite.transcript
+    )
     _auto_fill_missing_analytics_for_new_video(
         session,
         data,

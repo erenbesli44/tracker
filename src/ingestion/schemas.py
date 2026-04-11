@@ -55,10 +55,11 @@ class IngestionOverwriteFlags(CustomModel):
 class IngestionYoutubeRequest(CustomModel):
     person: IngestionPersonInput | None = None
     video: IngestionVideoInput
-    transcript: IngestionTranscriptInput
+    transcript: IngestionTranscriptInput | None = None
     summary: IngestionSummaryInput | None = None
     classification: IngestionClassificationInput | None = None
     overwrite: IngestionOverwriteFlags = Field(default_factory=IngestionOverwriteFlags)
+    transcript_languages: list[str] | None = None
     request_id: str | None = Field(default=None, max_length=100)
 
 
