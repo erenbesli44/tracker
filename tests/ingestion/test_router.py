@@ -63,7 +63,7 @@ async def test_ingest_youtube_full_create(client: AsyncClient):
     assert persons == []
 
 
-async def test_ingest_youtube_conflict_when_transcript_exists(client: AsyncClient):
+async def test_ingest_youtube_skips_transcript_when_exists_and_no_overwrite(client: AsyncClient):
     person_resp = await client.post("/persons/", json={"name": "Taner Genek"})
     person_id = person_resp.json()["id"]
     video_resp = await client.post(
@@ -82,7 +82,13 @@ async def test_ingest_youtube_conflict_when_transcript_exists(client: AsyncClien
             "overwrite": {"transcript": False},
         },
     )
-    assert response.status_code == 409
+    # With overwrite=False, the existing transcript is kept and the pipeline continues.
+    assert response.status_code == 200
+    assert response.json()["actions"]["transcript"] == "skipped"
+
+    # Confirm the original transcript was preserved.
+    transcript_resp = await client.get(f"/videos/{video_id}/transcript")
+    assert transcript_resp.json()["raw_text"] == "Old transcript"
 
 
 async def test_ingest_youtube_overwrite_and_skip(client: AsyncClient):

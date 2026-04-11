@@ -73,7 +73,7 @@ class IngestionActionResponse(CustomModel):
     person: Literal["created", "reused", "skipped"]
     channel: Literal["created", "reused"]
     video: Literal["created", "reused"]
-    transcript: Literal["created", "updated"]
+    transcript: Literal["created", "updated", "skipped"]
     summary: Literal["created", "updated", "skipped"]
     classification: Literal["created", "replaced", "skipped"]
 

@@ -714,10 +714,23 @@ def _resolve_video(
     return created, "created"
 
 
-def _resolve_transcript_input(data: IngestionYoutubeRequest) -> IngestionTranscriptInput:
-    """Return the transcript from the request, or auto-fetch it from YouTube."""
+def _resolve_transcript_input(
+    session: Session,
+    data: IngestionYoutubeRequest,
+    video,
+) -> IngestionTranscriptInput:
+    """Return transcript from request, existing DB record, or auto-fetch from YouTube."""
     if data.transcript is not None:
         return data.transcript
+
+    # Reuse existing transcript when not overwriting — avoid unnecessary YouTube fetch.
+    if not data.overwrite.transcript:
+        existing = videos_service.get_transcript(session, video.id)
+        if existing:
+            return IngestionTranscriptInput(
+                raw_text=existing.raw_text,
+                language=existing.language,
+            )
 
     video_id = videos_service.extract_youtube_id(data.video.video_url)
     if not video_id:
@@ -744,7 +757,8 @@ def _apply_transcript(session: Session, transcript_input: IngestionTranscriptInp
 
     if transcript:
         if not overwrite:
-            raise TranscriptAlreadyExists()
+            # Transcript already exists and we're not overwriting — nothing to do.
+            return transcript, "skipped"
         updated = videos_service.update_transcript(
             session,
             transcript,
@@ -1024,7 +1038,7 @@ def _ingest_youtube_pipeline(
         video_metadata,
     )
 
-    transcript_input = _resolve_transcript_input(data)
+    transcript_input = _resolve_transcript_input(session, data, video)
     transcript, transcript_action = _apply_transcript(
         session, transcript_input, video, overwrite=data.overwrite.transcript
     )
