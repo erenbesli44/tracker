@@ -995,9 +995,28 @@ def ingest_youtube(
 ) -> IngestionYoutubeResponse:
     try:
         return _ingest_youtube_pipeline(session, data)
-    except Exception:
+    except Exception as exc:
         session.rollback()
+        logger.error(
+            "Ingestion pipeline failed for video_url=%s: %s",
+            getattr(data.video, "video_url", "unknown"),
+            exc,
+            exc_info=True,
+        )
         raise
+
+
+def ingest_youtube_by_url(
+    session: Session,
+    video_url: str,
+    transcript_languages: list[str] | None = None,
+) -> IngestionYoutubeResponse:
+    """Convenience wrapper: ingest a single YouTube video given only its URL."""
+    data = IngestionYoutubeRequest(
+        video={"video_url": video_url},
+        transcript_languages=transcript_languages,
+    )
+    return ingest_youtube(session, data)
 
 
 def _ingest_youtube_pipeline(
