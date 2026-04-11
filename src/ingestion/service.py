@@ -483,9 +483,15 @@ def _auto_fill_missing_analytics_for_new_video(
     video,
     video_metadata: dict | None,
 ) -> None:
-    # Auto-run summary/classification only for first-time ingested videos.
+    # For reused videos, only fill if analytics are genuinely absent from DB.
     if video_action != "created":
-        return
+        if data.summary is None and videos_service.get_summary(session, video.id) is not None:
+            return
+        existing_mentions = session.exec(
+            select(TopicMention).where(TopicMention.video_id == video.id)
+        ).first()
+        if data.classification is None and existing_mentions is not None:
+            return
 
     llm_meta = _build_llm_metadata(
         data=data,
@@ -495,8 +501,11 @@ def _auto_fill_missing_analytics_for_new_video(
     )
     llm_transcript = _prepare_transcript_for_llm(transcript_text)
 
-    needs_summary = data.summary is None
-    needs_classification = data.classification is None
+    needs_summary = data.summary is None and videos_service.get_summary(session, video.id) is None
+    existing_mentions = session.exec(
+        select(TopicMention).where(TopicMention.video_id == video.id)
+    ).first()
+    needs_classification = data.classification is None and existing_mentions is None
     if not needs_summary and not needs_classification:
         return
 
