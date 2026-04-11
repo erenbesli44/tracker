@@ -476,22 +476,22 @@ def _auto_fill_missing_analytics_for_new_video(
     session: Session,
     data: IngestionYoutubeRequest,
     *,
-    video_action: str,
     transcript_text: str,
     transcript_language: str,
     channel,
     video,
     video_metadata: dict | None,
 ) -> None:
-    # For reused videos, only fill if analytics are genuinely absent from DB.
-    if video_action != "created":
-        if data.summary is None and videos_service.get_summary(session, video.id) is not None:
-            return
-        existing_mentions = session.exec(
-            select(TopicMention).where(TopicMention.video_id == video.id)
-        ).first()
-        if data.classification is None and existing_mentions is not None:
-            return
+    # Fill summary/classification whenever they are absent from both the request and the DB.
+    # This runs for new and reused videos alike, so re-ingesting a video with missing analytics
+    # will always fill them in without duplicating existing data.
+    needs_summary = data.summary is None and videos_service.get_summary(session, video.id) is None
+    has_classification = session.exec(
+        select(TopicMention).where(TopicMention.video_id == video.id)
+    ).first() is not None
+    needs_classification = data.classification is None and not has_classification
+    if not needs_summary and not needs_classification:
+        return
 
     llm_meta = _build_llm_metadata(
         data=data,
@@ -500,14 +500,6 @@ def _auto_fill_missing_analytics_for_new_video(
         video_metadata=video_metadata,
     )
     llm_transcript = _prepare_transcript_for_llm(transcript_text)
-
-    needs_summary = data.summary is None and videos_service.get_summary(session, video.id) is None
-    existing_mentions = session.exec(
-        select(TopicMention).where(TopicMention.video_id == video.id)
-    ).first()
-    needs_classification = data.classification is None and existing_mentions is None
-    if not needs_summary and not needs_classification:
-        return
 
     # Single merged LLM call for both summary and classification.
     llm_payload: dict | None = None
@@ -1045,7 +1037,6 @@ def _ingest_youtube_pipeline(
     _auto_fill_missing_analytics_for_new_video(
         session,
         data,
-        video_action=video_action,
         transcript_text=transcript.raw_text,
         transcript_language=transcript.language,
         channel=channel,
