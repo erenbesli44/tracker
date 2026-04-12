@@ -103,13 +103,18 @@ def fetch_youtube_metadata(video_url: str) -> dict[str, Any]:
     if not isinstance(title, str) or not isinstance(author_name, str):
         raise YouTubeMetadataFetchError("Missing YouTube metadata fields")
 
+    # Prefer timestamp (exact datetime) over upload_date (date-only YYYYMMDD).
     publish_date: datetime | None = None
-    upload_date = info.get("upload_date")
-    if upload_date:
-        try:
-            publish_date = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=None)
-        except ValueError:
-            pass
+    raw_timestamp = info.get("release_timestamp") or info.get("timestamp")
+    if isinstance(raw_timestamp, (int, float)):
+        publish_date = datetime.fromtimestamp(raw_timestamp, tz=timezone.utc).replace(tzinfo=None)
+    else:
+        upload_date = info.get("upload_date")
+        if upload_date:
+            try:
+                publish_date = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=None)
+            except ValueError:
+                pass
 
     raw_duration = info.get("duration")
     duration: int | None = int(raw_duration) if isinstance(raw_duration, (int, float)) else None
