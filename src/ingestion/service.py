@@ -1156,6 +1156,13 @@ def ingest_youtube_channel(
                 data.transcript_languages,
             )
         except videos_service.YouTubeTranscriptFetchError as exc:
+            logger.warning(
+                "Transcript unavailable for video_id=%s (code=%s): %s",
+                candidate.video_id,
+                exc.code,
+                exc.detail,
+                exc_info=True,
+            )
             videos_skipped_no_transcript += 1
             errors_count += 1
             results.append(

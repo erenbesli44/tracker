@@ -305,7 +305,7 @@ def fetch_transcript_from_youtube(
     except Exception as exc:
         raise YouTubeTranscriptFetchError(
             code="provider_error",
-            detail="Failed to fetch transcript from YouTube provider.",
+            detail=f"Failed to fetch transcript from YouTube provider: {type(exc).__name__}: {exc}",
         ) from exc
 
     segments = [
