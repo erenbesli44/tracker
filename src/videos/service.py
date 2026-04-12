@@ -171,6 +171,33 @@ def get_by_url(session: Session, url: str) -> Video | None:
     return session.exec(select(Video).where(Video.video_url == canonical_url)).first()
 
 
+def backfill_published_dates(session: Session) -> list[dict]:
+    """Fetch and update published_at for all videos missing it."""
+    videos = list(
+        session.exec(select(Video).where(Video.published_at.is_(None))).all()
+    )
+    results: list[dict] = []
+    for video in videos:
+        try:
+            metadata = fetch_youtube_metadata(video.video_url)
+        except YouTubeMetadataFetchError:
+            results.append({"video_id": video.id, "status": "failed", "published_at": None})
+            continue
+
+        publish_date = metadata.get("publish_date")
+        if publish_date:
+            video.published_at = publish_date
+            session.add(video)
+            session.flush()
+            results.append({"video_id": video.id, "status": "updated", "published_at": publish_date.isoformat()})
+        else:
+            results.append({"video_id": video.id, "status": "not_available", "published_at": None})
+
+    if results:
+        session.commit()
+    return results
+
+
 def list_by_person(session: Session, person_id: int) -> list[Video]:
     return list(
         session.exec(

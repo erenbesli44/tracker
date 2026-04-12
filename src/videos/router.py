@@ -48,6 +48,21 @@ def _summary_to_response(summary) -> VideoSummaryResponse:
     )
 
 
+@router.post(
+    "/backfill-published-dates",
+    status_code=status.HTTP_200_OK,
+    summary="Fetch and update published_at for all videos missing it",
+)
+def backfill_published_dates(session: SessionDep) -> dict:
+    results = service.backfill_published_dates(session)
+    updated = sum(1 for r in results if r["status"] == "updated")
+    return {
+        "total_processed": len(results),
+        "updated": updated,
+        "results": results,
+    }
+
+
 @router.post("/", response_model=VideoResponse, status_code=status.HTTP_201_CREATED)
 def create_video(data: VideoCreate, session: SessionDep) -> VideoResponse:
     if not service.extract_youtube_id(data.video_url):
