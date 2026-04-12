@@ -157,8 +157,24 @@ def _ensure_post_rebuild_indexes(session: Session) -> None:
     )
 
 
+def _run_postgres_migrations(session: Session) -> None:
+    """Add columns that exist in SQLModel models but not yet in the Postgres schema."""
+    session.exec(
+        text("ALTER TABLE youtube_channel ADD COLUMN IF NOT EXISTS primary_topic_slug VARCHAR(100)")
+    )
+    session.exec(
+        text("ALTER TABLE youtube_channel ADD COLUMN IF NOT EXISTS expected_subtopics VARCHAR")
+    )
+    session.commit()
+
+
 def run_lightweight_migrations() -> None:
-    """Best-effort schema upgrades for SQLite environments without Alembic."""
+    """Best-effort schema upgrades without Alembic."""
+    if engine.dialect.name == "postgresql":
+        with Session(engine) as session:
+            _run_postgres_migrations(session)
+        return
+
     if engine.dialect.name != "sqlite":
         return
 
