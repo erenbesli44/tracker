@@ -6,11 +6,11 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from src.config import settings
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    echo=False,
-    connect_args={"check_same_thread": False},
-)
+_engine_kwargs: dict = {"echo": False}
+if settings.DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(settings.DATABASE_URL, **_engine_kwargs)
 
 
 def get_session():
@@ -179,6 +179,16 @@ def run_lightweight_migrations() -> None:
             if mention_person_not_null:
                 _rebuild_topic_mention_table_nullable_person(session)
             session.exec(text("PRAGMA foreign_keys=ON"))
+
+        # Add channel-level topic focus columns.
+        if not _sqlite_has_column(session, "youtube_channel", "primary_topic_slug"):
+            session.exec(
+                text("ALTER TABLE youtube_channel ADD COLUMN primary_topic_slug VARCHAR(100)")
+            )
+        if not _sqlite_has_column(session, "youtube_channel", "expected_subtopics"):
+            session.exec(
+                text("ALTER TABLE youtube_channel ADD COLUMN expected_subtopics VARCHAR")
+            )
 
         _ensure_post_rebuild_indexes(session)
 

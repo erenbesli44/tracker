@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "sqlite:///./tracker.db"
+    DATABASE_URL: str = "sqlite:///./tracker.db"  # override via env for PostgreSQL
     ENVIRONMENT: str = "local"
     APP_VERSION: str = "0.1.0"
     GEMINI_API_KEY: str | None = None

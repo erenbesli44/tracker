@@ -15,10 +15,7 @@ COPY main.py ./
 # Install production dependencies + project into the venv (no dev deps, no re-sync at runtime)
 RUN uv sync --frozen --no-dev
 
-# Create data directory for SQLite
-RUN mkdir -p /data
-
-ENV DATABASE_URL=sqlite:////data/tracker.db
+# DATABASE_URL is injected by Coolify at runtime
 ENV ENVIRONMENT=production
 
 EXPOSE 8000

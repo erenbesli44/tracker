@@ -11,6 +11,8 @@ dependencies = [
     "python-slugify>=8.0.0",
     "pydantic-settings>=2.0.0",
     "youtube-transcript-api>=1.2.4",
+    "yt-dlp>=2026.3.17",
+    "psycopg2-binary>=2.9.0",
 ]
 
 [project.optional-dependencies]
