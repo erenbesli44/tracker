@@ -103,6 +103,13 @@ class _ChannelVideoCandidate:
     published_at: datetime | None
 
 
+@dataclass
+class _ChannelPlaylistInfo:
+    candidates: list["_ChannelVideoCandidate"]
+    channel_name: str | None
+    channel_handle: str | None
+
+
 def _compact_whitespace(text: str) -> str:
     return " ".join(text.split()).strip()
 
@@ -940,7 +947,7 @@ def _resolve_youtube_channel_id(youtube_channel: str) -> str:
     )
 
 
-def _list_recent_channel_videos(channel_id: str, limit: int) -> list[_ChannelVideoCandidate]:
+def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylistInfo:
     channel_url = f"https://www.youtube.com/channel/{channel_id}/videos"
     opts = {
         "quiet": True,
@@ -958,8 +965,14 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> list[_ChannelVid
             detail="Failed to fetch YouTube channel videos.",
         ) from exc
 
-    entries = (info or {}).get("entries") or []
-    results: list[_ChannelVideoCandidate] = []
+    info = info or {}
+    # Channel-level metadata from the playlist response
+    channel_name: str | None = str(info.get("channel") or info.get("uploader") or "").strip() or None
+    raw_handle = str(info.get("uploader_id") or "").strip()
+    channel_handle: str | None = raw_handle if raw_handle else None
+
+    entries = info.get("entries") or []
+    candidates: list[_ChannelVideoCandidate] = []
     for entry in entries[:limit]:
         if not entry:
             continue
@@ -977,7 +990,7 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> list[_ChannelVid
             except ValueError:
                 pass
 
-        results.append(
+        candidates.append(
             _ChannelVideoCandidate(
                 video_id=video_id,
                 video_url=f"https://www.youtube.com/watch?v={video_id}",
@@ -985,7 +998,11 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> list[_ChannelVid
                 published_at=published_at,
             )
         )
-    return results
+    return _ChannelPlaylistInfo(
+        candidates=candidates,
+        channel_name=channel_name,
+        channel_handle=channel_handle,
+    )
 
 
 def ingest_youtube(
@@ -1096,7 +1113,18 @@ def ingest_youtube_channel(
     data: IngestionYoutubeChannelRunRequest,
 ) -> IngestionYoutubeChannelRunResponse:
     channel_id = _resolve_youtube_channel_id(data.youtube_channel)
-    candidates = _list_recent_channel_videos(channel_id, data.video_count)
+    playlist_info = _list_recent_channel_videos(channel_id, data.video_count)
+    candidates = playlist_info.candidates
+
+    # Build a person hint from what we already know about the channel so that
+    # _resolve_channel can identify the owner even when per-video metadata fetch
+    # fails (e.g. YouTube bot-detection blocks yt-dlp on the server).
+    person_hint: dict | None = None
+    if playlist_info.channel_name or playlist_info.channel_handle:
+        person_hint = {
+            "name": playlist_info.channel_name,
+            "platform_handle": playlist_info.channel_handle,
+        }
 
     videos_ingested = 0
     videos_skipped_existing = 0
@@ -1141,6 +1169,7 @@ def ingest_youtube_channel(
             continue
 
         ingestion_payload = IngestionYoutubeRequest(
+            person=person_hint,
             video={
                 "video_url": candidate.video_url,
                 "title": candidate.title,
