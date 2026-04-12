@@ -10,6 +10,9 @@ channels:
   - handle: "@ATİLLAYEŞİLADA"
     name: "Atilla Yeşilada"
     video_count: 2
+  - handle: "@DevrimAkyıl"
+    name: "Devrim Akyıl"
+    video_count: 2
 # Example entries:
 #
 #  - youtube_channel_id: "UCxxxxxxxxxxxxxxxxxxxxxxxx"
