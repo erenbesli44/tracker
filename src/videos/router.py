@@ -28,6 +28,7 @@ from src.videos.schemas import (
     VideoResponse,
     VideoSummaryCreate,
     VideoSummaryResponse,
+    VideoUpdate,
     VideoWithTranscript,
 )
 
@@ -86,6 +87,15 @@ def create_video(data: VideoCreate, session: SessionDep) -> VideoResponse:
         data.channel_id = channel.id
 
     return service.create(session, data)
+
+
+@router.patch("/{video_id}", response_model=VideoResponse)
+def update_video(
+    data: VideoUpdate,
+    video: ValidVideoDep,
+    session: SessionDep,
+) -> VideoResponse:
+    return service.update(session, video, data)
 
 
 @router.get("/", response_model=list[VideoResponse])

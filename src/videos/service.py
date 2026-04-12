@@ -20,7 +20,7 @@ from youtube_transcript_api._errors import (
 
 from src.models import utc_now
 from src.videos.models import Transcript, Video, VideoSummary
-from src.videos.schemas import TranscriptCreate, VideoCreate, VideoSummaryCreate
+from src.videos.schemas import TranscriptCreate, VideoCreate, VideoSummaryCreate, VideoUpdate
 
 DEFAULT_TRANSCRIPT_LANGUAGES = ["tr", "en"]
 
@@ -155,6 +155,19 @@ def create(session: Session, data: VideoCreate) -> Video:
 
 def get_by_id(session: Session, video_id: int) -> Video | None:
     return session.get(Video, video_id)
+
+
+def update(session: Session, video: Video, data: VideoUpdate) -> Video:
+    if data.title is not None:
+        video.title = data.title
+    if data.published_at is not None:
+        video.published_at = data.published_at
+    if data.duration is not None:
+        video.duration = data.duration
+    session.add(video)
+    session.commit()
+    session.refresh(video)
+    return video
 
 
 def get_by_video_id(session: Session, video_id: str) -> Video | None:

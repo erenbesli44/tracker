@@ -34,6 +34,12 @@ class VideoResponse(CustomModel):
     created_at: datetime
 
 
+class VideoUpdate(CustomModel):
+    title: Optional[str] = None
+    published_at: Optional[datetime] = None
+    duration: Optional[int] = Field(default=None, ge=0)
+
+
 class TranscriptCreate(CustomModel):
     raw_text: str = Field(min_length=1)
     language: str = Field(default="tr", max_length=10)
