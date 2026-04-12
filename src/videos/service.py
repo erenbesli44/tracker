@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import yt_dlp
 
@@ -171,6 +172,41 @@ def get_by_url(session: Session, url: str) -> Video | None:
     return session.exec(select(Video).where(Video.video_url == canonical_url)).first()
 
 
+def fetch_publish_date_from_html(video_url: str) -> datetime | None:
+    """Fetch publish date by parsing the YouTube watch page HTML.
+
+    Falls back to this when yt-dlp is blocked on the server.
+    Looks for datePublished in JSON-LD or meta tags.
+    """
+    canonical = canonicalize_youtube_url(video_url)
+    request = Request(canonical, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urlopen(request, timeout=15) as response:  # nosec B310
+            html = response.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+    # Match ISO 8601 datetimes: "2026-04-05T03:47:47-07:00" or "2026-04-05"
+    for pattern in (
+        r'"datePublished"\s*:\s*"([^"]+)"',
+        r'itemprop="datePublished"\s+content="([^"]+)"',
+        r'"publishDate"\s*:\s*"(\d{4}-\d{2}-\d{2}[^"]*)"',
+        r'"uploadDate"\s*:\s*"([^"]+)"',
+    ):
+        match = re.search(pattern, html)
+        if match:
+            raw = match.group(1).strip()
+            try:
+                parsed = datetime.fromisoformat(raw)
+                if parsed.tzinfo is not None:
+                    parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+                return parsed
+            except ValueError:
+                continue
+
+    return None
+
+
 def backfill_published_dates(session: Session) -> list[dict]:
     """Fetch and update published_at for all videos missing it."""
     videos = list(
@@ -178,20 +214,26 @@ def backfill_published_dates(session: Session) -> list[dict]:
     )
     results: list[dict] = []
     for video in videos:
+        publish_date: datetime | None = None
+
+        # Try yt-dlp first (most precise).
         try:
             metadata = fetch_youtube_metadata(video.video_url)
+            publish_date = metadata.get("publish_date")
         except YouTubeMetadataFetchError:
-            results.append({"video_id": video.id, "status": "failed", "published_at": None})
-            continue
+            pass
 
-        publish_date = metadata.get("publish_date")
+        # Fall back to HTML parsing when yt-dlp fails.
+        if publish_date is None:
+            publish_date = fetch_publish_date_from_html(video.video_url)
+
         if publish_date:
             video.published_at = publish_date
             session.add(video)
             session.flush()
             results.append({"video_id": video.id, "status": "updated", "published_at": publish_date.isoformat()})
         else:
-            results.append({"video_id": video.id, "status": "not_available", "published_at": None})
+            results.append({"video_id": video.id, "status": "failed", "published_at": None})
 
     if results:
         session.commit()
