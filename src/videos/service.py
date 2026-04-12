@@ -114,6 +114,10 @@ def fetch_youtube_metadata(video_url: str) -> dict[str, Any]:
     raw_duration = info.get("duration")
     duration: int | None = int(raw_duration) if isinstance(raw_duration, (int, float)) else None
 
+    # yt-dlp provides the video's original language as ISO 639-1 code (e.g. "tr", "en").
+    raw_language = info.get("language")
+    language = raw_language.strip().lower() if isinstance(raw_language, str) and raw_language.strip() else None
+
     return {
         "title": title,
         "author_name": author_name,
@@ -121,6 +125,7 @@ def fetch_youtube_metadata(video_url: str) -> dict[str, Any]:
         "channel_id": info.get("channel_id") or "",
         "publish_date": publish_date,
         "duration": duration,
+        "language": language,
     }
 
 

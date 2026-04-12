@@ -539,6 +539,7 @@ def _auto_fill_missing_analytics_for_new_video(
                 published_at=llm_meta["published_at"],
                 source_url=llm_meta["source_url"],
                 transcript=llm_transcript,
+                output_language=transcript_language,
                 channel_primary_topic=llm_meta["channel_primary_topic"],
                 channel_expected_subtopics=llm_meta["channel_expected_subtopics"],
             )
@@ -745,6 +746,7 @@ def _resolve_transcript_input(
     session: Session,
     data: IngestionYoutubeRequest,
     video,
+    video_metadata: dict | None,
 ) -> IngestionTranscriptInput:
     """Return transcript from request, existing DB record, or auto-fetch from YouTube."""
     if data.transcript is not None:
@@ -763,10 +765,14 @@ def _resolve_transcript_input(
     if not video_id:
         raise InvalidYouTubeUrl()
 
+    # Use the video's original language (from yt-dlp metadata) as primary preference.
+    detected_lang = video_metadata.get("language") if video_metadata else None
+    languages = data.transcript_languages
+    if not languages and detected_lang:
+        languages = [detected_lang, "en"] if detected_lang != "en" else ["en"]
+
     try:
-        fetched = videos_service.fetch_transcript_from_youtube(
-            video_id, data.transcript_languages
-        )
+        fetched = videos_service.fetch_transcript_from_youtube(video_id, languages)
     except videos_service.YouTubeTranscriptFetchError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -775,7 +781,7 @@ def _resolve_transcript_input(
 
     return IngestionTranscriptInput(
         raw_text=fetched["full_text"],
-        language=str(fetched.get("language", "tr")),
+        language=str(fetched.get("language", detected_lang or "en")),
     )
 
 
@@ -1065,7 +1071,7 @@ def _ingest_youtube_pipeline(
         video_metadata,
     )
 
-    transcript_input = _resolve_transcript_input(session, data, video)
+    transcript_input = _resolve_transcript_input(session, data, video, video_metadata)
     transcript, transcript_action = _apply_transcript(
         session, transcript_input, video, overwrite=data.overwrite.transcript
     )

@@ -282,7 +282,11 @@ async def test_ingest_youtube_channel_processes_last_n_and_skips_existing(
     def fake_list_recent(channel_id: str, limit: int):
         captured["limit"] = limit
         assert channel_id == "UC1111111111111111111111"
-        return candidates
+        return ingestion_service._ChannelPlaylistInfo(
+            candidates=candidates,
+            channel_name="Test Channel",
+            channel_handle="@testchannel",
+        )
 
     monkeypatch.setattr(
         ingestion_service,
@@ -365,7 +369,11 @@ async def test_ingest_youtube_channel_second_run_skips_already_extracted(
     monkeypatch.setattr(
         ingestion_service,
         "_list_recent_channel_videos",
-        lambda _channel_id, _limit: candidates,
+        lambda _channel_id, _limit: ingestion_service._ChannelPlaylistInfo(
+            candidates=candidates,
+            channel_name="Atilla Yesilada",
+            channel_handle="@atillayesilada",
+        ),
     )
 
     def fake_fetch_transcript(video_id: str, _langs=None):
