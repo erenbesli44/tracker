@@ -19,3 +19,16 @@ def valid_topic_id(
 
 
 ValidTopicDep = Annotated[Topic, Depends(valid_topic_id)]
+
+
+def valid_topic_slug(
+    topic_slug: Annotated[str, Path(min_length=1, max_length=255)],
+    session: SessionDep,
+) -> Topic:
+    topic = service.get_by_slug(session, topic_slug)
+    if not topic:
+        raise TopicNotFound()
+    return topic
+
+
+ValidTopicSlugDep = Annotated[Topic, Depends(valid_topic_slug)]

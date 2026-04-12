@@ -1,10 +1,12 @@
-from fastapi import APIRouter, status
+from typing import Annotated, Optional
+
+from fastapi import APIRouter, Query, status
 
 from src.database import SessionDep
 from src.topics import service
-from src.topics.dependencies import ValidTopicDep
+from src.topics.dependencies import ValidTopicDep, ValidTopicSlugDep
 from src.topics.exceptions import TopicSlugConflict
-from src.topics.schemas import TopicCreate, TopicNode, TopicResponse
+from src.topics.schemas import TopicCreate, TopicNode, TopicOpinionsResponse, TopicResponse
 
 router = APIRouter(prefix="/topics", tags=["topics"])
 
@@ -26,6 +28,18 @@ def list_topics(session: SessionDep) -> list[TopicResponse]:
 @router.get("/tree", response_model=list[TopicNode])
 def get_topic_tree(session: SessionDep) -> list[TopicNode]:
     return service.get_topic_tree(session)
+
+
+@router.get("/{topic_slug}/opinions", response_model=TopicOpinionsResponse)
+def get_topic_opinions(
+    topic: ValidTopicSlugDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=50)] = 5,
+    days: Annotated[Optional[int], Query(ge=1, le=365)] = 30,
+) -> TopicOpinionsResponse:
+    return service.get_topic_opinions_by_channel(
+        session, topic, limit_per_channel=limit, days=days
+    )
 
 
 @router.get("/{topic_id}", response_model=TopicResponse)
