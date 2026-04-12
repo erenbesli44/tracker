@@ -17,7 +17,7 @@ async def test_deep_pipeline_for_specific_video(client: AsyncClient, monkeypatch
 
     monkeypatch.setattr(
         ingestion_service.videos_service,
-        "fetch_youtube_oembed_metadata",
+        "fetch_youtube_metadata",
         lambda _url: {
             "title": "Makro Görünüm ve Piyasalar",
             "author_name": "Atilla Yesilada",

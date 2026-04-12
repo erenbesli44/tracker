@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     import src.videos.models  # noqa: F401
     import src.topics.models  # noqa: F401
     import src.classification.models  # noqa: F401
+    import src.jobs.youtube_watch.models  # noqa: F401
 
     create_db_and_tables()
     run_lightweight_migrations()

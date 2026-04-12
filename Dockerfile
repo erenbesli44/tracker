@@ -10,6 +10,7 @@ COPY pyproject.toml uv.lock ./
 
 # Copy application code
 COPY src/ src/
+COPY config/ config/
 COPY main.py ./
 
 # Install production dependencies + project into the venv (no dev deps, no re-sync at runtime)

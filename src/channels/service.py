@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 from slugify import slugify
@@ -6,6 +7,22 @@ from sqlmodel import Session, select
 from src.channels.models import YouTubeChannel
 from src.channels.schemas import ChannelCreate, ChannelUpdate
 from src.persons.models import Person
+
+
+def _encode_subtopics(subtopics: list[str] | None) -> str | None:
+    if subtopics is None:
+        return None
+    return json.dumps(subtopics, ensure_ascii=False)
+
+
+def decode_subtopics(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def create(session: Session, data: ChannelCreate) -> YouTubeChannel:
@@ -18,6 +35,8 @@ def create(session: Session, data: ChannelCreate) -> YouTubeChannel:
         youtube_channel_id=data.youtube_channel_id,
         channel_url=data.channel_url,
         bio=data.bio,
+        primary_topic_slug=data.primary_topic_slug,
+        expected_subtopics=_encode_subtopics(data.expected_subtopics),
         legacy_person_id=data.legacy_person_id,
     )
     session.add(channel)
@@ -58,6 +77,8 @@ def list_all(session: Session) -> list[YouTubeChannel]:
 
 def update(session: Session, channel: YouTubeChannel, data: ChannelUpdate) -> YouTubeChannel:
     update_data = data.model_dump(exclude_unset=True)
+    if "expected_subtopics" in update_data:
+        update_data["expected_subtopics"] = _encode_subtopics(update_data["expected_subtopics"])
     for key, value in update_data.items():
         setattr(channel, key, value)
 

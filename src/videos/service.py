@@ -3,8 +3,9 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote_plus, urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import urlparse
+
+import yt_dlp
 
 logger = logging.getLogger(__name__)
 
@@ -71,62 +72,56 @@ def extract_youtube_channel_handle(author_url: str | None) -> str | None:
     return parts[-1]
 
 
-def fetch_youtube_oembed_metadata(video_url: str) -> dict[str, str]:
+def fetch_youtube_metadata(video_url: str) -> dict[str, Any]:
+    """Fetch video metadata via yt-dlp.
+
+    Returns title, channel name/url/id, publish date, duration in one call.
+    Replaces the previous oEmbed + HTML-scraping approach.
+    """
     canonical_url = canonicalize_youtube_url(video_url)
     if not extract_youtube_id(canonical_url):
         raise YouTubeMetadataFetchError("Invalid YouTube URL")
 
-    endpoint = (
-        "https://www.youtube.com/oembed?"
-        f"url={quote_plus(canonical_url)}&format=json"
-    )
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+    }
     try:
-        with urlopen(endpoint, timeout=10) as response:  # nosec B310
-            raw = response.read().decode("utf-8")
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(canonical_url, download=False)
     except Exception as exc:
         raise YouTubeMetadataFetchError("Failed to fetch YouTube metadata") from exc
 
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise YouTubeMetadataFetchError("Invalid YouTube metadata response") from exc
+    if not info:
+        raise YouTubeMetadataFetchError("Empty response from YouTube")
 
-    title = payload.get("title")
-    author_name = payload.get("author_name")
-    author_url = payload.get("author_url")
+    title = info.get("title")
+    author_name = info.get("uploader") or info.get("channel")
+    author_url = info.get("uploader_url") or info.get("channel_url") or ""
+
     if not isinstance(title, str) or not isinstance(author_name, str):
         raise YouTubeMetadataFetchError("Missing YouTube metadata fields")
+
+    publish_date: datetime | None = None
+    upload_date = info.get("upload_date")
+    if upload_date:
+        try:
+            publish_date = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=None)
+        except ValueError:
+            pass
+
+    raw_duration = info.get("duration")
+    duration: int | None = int(raw_duration) if isinstance(raw_duration, (int, float)) else None
 
     return {
         "title": title,
         "author_name": author_name,
         "author_url": author_url if isinstance(author_url, str) else "",
+        "channel_id": info.get("channel_id") or "",
+        "publish_date": publish_date,
+        "duration": duration,
     }
-
-
-def fetch_youtube_publish_date(video_id: str) -> datetime | None:
-    """Fetch the publish date from the YouTube video page."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urlopen(request, timeout=10) as response:  # nosec B310
-            html = response.read().decode("utf-8", errors="ignore")
-    except Exception:
-        logger.warning("Failed to fetch YouTube page for publish date, video_id=%s", video_id)
-        return None
-
-    match = re.search(r'"publishDate"\s*:\s*"([^"]+)"', html)
-    if not match:
-        return None
-
-    try:
-        parsed = datetime.fromisoformat(match.group(1))
-    except ValueError:
-        return None
-
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return parsed
 
 
 def create(session: Session, data: VideoCreate) -> Video:

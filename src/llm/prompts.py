@@ -6,18 +6,67 @@
 # ---------------------------------------------------------------------------
 
 ANALYSIS_PROMPT_TEMPLATE = """\
-You are a content analyst for a social-media tracking platform specialized in Turkish-language media.
+You are a content analyst for a Turkish-language media tracking platform.
 
-Analyze the transcript below and return a single JSON object containing both a summary and a topic classification. Base your analysis only on the transcript content. Do not use outside knowledge. Return valid JSON only — no markdown, no explanation.
-
+Analyze the transcript below and return a single JSON object with summary + topic classification.
+Base analysis ONLY on transcript content. Return valid JSON only — no markdown, no explanation.
 All free-text fields must be in {{output_language}}.
 
-TOPIC TAXONOMY (use these labels in primary_topic and topic_segments):
-Main topics: economy_finance, politics, sports, technology, business, international_relations, mixed, other
-Economy/finance subtopics: usd_try, eur_try, gold, silver, bist, deposit_rates, inflation, interest_rates, cbt_policy, global_markets, dow_jones, nasdaq, oil, crypto
-Politics subtopics: elections, government, opposition, foreign_policy, security
+══════════════════════════════════════════════════════════════
+CHANNEL CONTEXT
+══════════════════════════════════════════════════════════════
+Channel: {{channel_name}}
+Channel Primary Focus: {{channel_primary_topic}}
+Expected Subtopics for this channel: {{channel_expected_subtopics}}
 
-JSON SCHEMA:
+This channel primarily covers {{channel_primary_topic}}. Classification MUST
+prefer the expected subtopics listed above. Only create a classification
+outside these subtopics if NONE of the expected subtopics reaches a
+confidence >= 0.40 for any segment of the transcript.
+
+══════════════════════════════════════════════════════════════
+FULL TOPIC TAXONOMY
+══════════════════════════════════════════════════════════════
+Main topics: economy_finance, politics, sports, technology, other
+
+Economy/finance subtopics:
+  usd_try, eur_try, gold, silver, bist, deposit_rates, inflation,
+  interest_rates, cbt_policy, global_markets, dow_jones, nasdaq, oil, crypto
+
+Politics subtopics:
+  domestic_politics, foreign_policy, geopolitics, elections, security
+
+══════════════════════════════════════════════════════════════
+CLASSIFICATION RULES (strict)
+══════════════════════════════════════════════════════════════
+1. PREFER channel's expected subtopics. These are the subtopics this channel
+   typically discusses. Assign them when there is reasonable evidence
+   (confidence >= 0.30).
+
+2. CONFIDENCE THRESHOLDS:
+   - >= 0.70  : Strong match — the speaker clearly discusses this subtopic
+                 with specific data, opinions, or analysis.
+   - 0.40-0.69: Moderate match — the subtopic is mentioned with some
+                 substance but not the primary focus.
+   - 0.30-0.39: Weak match — brief mention or passing reference. Only
+                 include for expected subtopics of this channel.
+   - < 0.30   : Do NOT include this subtopic in the output.
+
+3. NEW/UNEXPECTED SUBTOPICS: If and only if NO expected subtopic reaches
+   confidence >= 0.40, you may classify using any subtopic from the full
+   taxonomy or create a new label. Use format "other:<descriptive_slug>"
+   for truly novel topics. This should be rare.
+
+4. Do NOT force-fit: If the transcript genuinely discusses a non-expected
+   subtopic with high confidence (>= 0.70), include it alongside expected
+   subtopics. But never fabricate low-confidence entries just to fill the
+   expected list.
+
+5. Maximum 7 topic_segments per video. Prioritize by confidence descending.
+
+══════════════════════════════════════════════════════════════
+JSON SCHEMA
+══════════════════════════════════════════════════════════════
 {
   "language": "string (ISO 639-1)",
   "summary": {
@@ -28,12 +77,14 @@ JSON SCHEMA:
     {"point": "key takeaway or insight"}
   ],
   "primary_topic": {
-    "label": "one main topic from taxonomy"
+    "label": "one main topic from taxonomy",
+    "confidence": 0.0
   },
   "topic_segments": [
     {
-      "subtopic": "specific subtopic label from taxonomy",
-      "summary": "what the speaker says about this subtopic",
+      "subtopic": "subtopic label from taxonomy or other:<slug>",
+      "is_expected": true,
+      "summary": "3-5 sentence summary of what the speaker says",
       "evidence": "short quote or paraphrase from transcript",
       "stance": "positive | negative | cautious | neutral | mixed",
       "confidence": 0.0
@@ -41,12 +92,21 @@ JSON SCHEMA:
   ]
 }
 
-INSTRUCTIONS:
+══════════════════════════════════════════════════════════════
+FIELD INSTRUCTIONS
+══════════════════════════════════════════════════════════════
 - summary.short: concise 1-3 sentence overview.
-- summary.detailed: comprehensive paragraph covering the main points.
-- key_points: up to 5 short bullet-style takeaways (max 15 words each, no full sentences).
-- primary_topic: the single dominant focus of the transcript.
-- topic_segments: one entry per distinct subtopic discussed. Use specific subtopic labels (e.g. "bist", "gold", "usd_try"). The "summary" field must be 3-5 sentences and capture the speaker's full opinion, reasoning, key price levels, and outlook so the reader understands the topic without reading the transcript. For finance: positive=bullish outlook, negative=bearish outlook. Lower confidence for topics mentioned only in passing.
+- summary.detailed: comprehensive paragraph covering main points.
+- key_points: up to 5 short bullet-style takeaways (max 15 words each).
+- primary_topic.label: the single dominant focus of the transcript.
+- primary_topic.confidence: how strongly the transcript matches this topic.
+- topic_segments: one entry per distinct subtopic discussed.
+  - subtopic: use taxonomy slug. For unexpected new topics: "other:<slug>".
+  - is_expected: true if subtopic is in the channel's expected list, false otherwise.
+  - summary: 3-5 sentences capturing speaker's full opinion, reasoning, key
+    price levels, and outlook.
+  - stance: for finance: positive=bullish, negative=bearish.
+  - confidence: 0.0-1.0, be precise. Reflect actual depth of discussion.
 
 INPUT METADATA:
 - source_platform: {{source_platform}}

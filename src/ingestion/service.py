@@ -2,12 +2,11 @@ import logging
 import re
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from statistics import mean
-from urllib.parse import quote_plus, urlparse
-from urllib.request import Request, urlopen
-from xml.etree import ElementTree
+from urllib.parse import urlparse
 
+import yt_dlp
 from fastapi import HTTPException, status
 
 logger = logging.getLogger(__name__)
@@ -16,6 +15,7 @@ from sqlmodel import Session, select
 
 from src.channels import service as channels_service
 from src.channels.schemas import ChannelCreate
+from src.channels.service import decode_subtopics
 from src.classification import service as classification_service
 from src.classification.constants import TOPIC_KEYWORDS
 from src.classification.models import TopicMention
@@ -59,6 +59,8 @@ _SUBTOPIC_TO_TOPIC_SLUG = {
     "oil": "petrol",
     "crypto": "bitcoin-kripto",
     "foreign_policy": "dis-siyaset",
+    "domestic_politics": "ic-siyaset",
+    "geopolitics": "jeopolitik",
     "security": "jeopolitik",
     "government": "ic-siyaset",
     "opposition": "ic-siyaset",
@@ -276,6 +278,11 @@ def _build_llm_metadata(
     if raw_published is not None:
         published_at = raw_published.isoformat()
 
+    # Channel-level topic context for the LLM prompt.
+    channel_primary_topic = _safe_str(getattr(channel, "primary_topic_slug", None))
+    subtopics_list = decode_subtopics(getattr(channel, "expected_subtopics", None))
+    channel_expected_subtopics = ", ".join(subtopics_list) if subtopics_list else ""
+
     return {
         "source_platform": "youtube",
         "channel_name": channel_name or "unknown",
@@ -283,6 +290,8 @@ def _build_llm_metadata(
         "video_title": video_title or "unknown",
         "published_at": published_at or "unknown",
         "source_url": videos_service.canonicalize_youtube_url(data.video.video_url),
+        "channel_primary_topic": channel_primary_topic,
+        "channel_expected_subtopics": channel_expected_subtopics,
     }
 
 
@@ -334,8 +343,14 @@ def _resolve_topic_slug_from_llm(
     subtopic: str,
     topic: str,
     primary_topic: str,
-) -> str:
+) -> str | None:
     normalized_subtopic = subtopic.strip().lower()
+
+    # Handle "other:<slug>" format — novel topics from the LLM.
+    # Return None so the caller can decide whether to create or skip.
+    if normalized_subtopic.startswith("other:"):
+        return None
+
     if normalized_subtopic in _SUBTOPIC_TO_TOPIC_SLUG:
         return _SUBTOPIC_TO_TOPIC_SLUG[normalized_subtopic]
 
@@ -374,6 +389,10 @@ def _classification_from_llm_payload(
             topic=topic,
             primary_topic=primary_topic,
         )
+        if topic_slug is None:
+            # "other:*" novel topic — skip, no matching DB topic.
+            logger.info("Skipping novel subtopic '%s' (no DB topic)", subtopic)
+            return
         topic_model = topics_service.get_by_slug(session, topic_slug)
         if topic_model is None:
             return
@@ -513,6 +532,8 @@ def _auto_fill_missing_analytics_for_new_video(
                 published_at=llm_meta["published_at"],
                 source_url=llm_meta["source_url"],
                 transcript=llm_transcript,
+                channel_primary_topic=llm_meta["channel_primary_topic"],
+                channel_expected_subtopics=llm_meta["channel_expected_subtopics"],
             )
             logger.info("LLM analysis generated for video_url=%s", llm_meta["source_url"])
         except llm_service.LLMGenerationError:
@@ -642,14 +663,15 @@ def _resolve_channel(
 
 def _resolve_published_at(
     data: IngestionYoutubeRequest,
-    video_url: str,
+    video_metadata: dict | None = None,
 ) -> datetime | None:
-    """Return published_at from payload, or fetch it from YouTube."""
+    """Return published_at from payload, then metadata, then give up."""
     if data.video.published_at is not None:
         return data.video.published_at
-    video_id = videos_service.extract_youtube_id(video_url)
-    if video_id:
-        return videos_service.fetch_youtube_publish_date(video_id)
+    if video_metadata:
+        publish_date = video_metadata.get("publish_date")
+        if isinstance(publish_date, datetime):
+            return publish_date
     return None
 
 
@@ -679,7 +701,7 @@ def _resolve_video(
             existing.title = data.video.title
 
         if existing.published_at is None:
-            existing.published_at = _resolve_published_at(data, data.video.video_url)
+            existing.published_at = _resolve_published_at(data, video_metadata)
 
         session.add(existing)
         session.flush()
@@ -690,7 +712,13 @@ def _resolve_video(
     if not title and video_metadata and isinstance(video_metadata.get("title"), str):
         title = str(video_metadata["title"])
 
-    published_at = _resolve_published_at(data, data.video.video_url)
+    published_at = _resolve_published_at(data, video_metadata)
+
+    duration = data.video.duration
+    if duration is None and video_metadata:
+        raw_duration = video_metadata.get("duration")
+        if isinstance(raw_duration, (int, float)):
+            duration = int(raw_duration)
 
     created = videos_service.create(
         session,
@@ -700,7 +728,7 @@ def _resolve_video(
             video_url=data.video.video_url,
             title=title,
             published_at=published_at,
-            duration=data.video.duration,
+            duration=duration,
         ),
     )
     return created, "created"
@@ -829,33 +857,6 @@ def _apply_classification(session: Session, data: IngestionYoutubeRequest, video
     return classification_result.total_mentions, "created"
 
 
-def _parse_feed_datetime(raw_value: str | None) -> datetime | None:
-    if not raw_value:
-        return None
-
-    try:
-        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-    if parsed.tzinfo is None:
-        return parsed
-    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
-
-
-def _extract_channel_id_from_html(html: str) -> str | None:
-    patterns = (
-        r'"channelId":"(UC[A-Za-z0-9_-]{22})"',
-        r'"externalId":"(UC[A-Za-z0-9_-]{22})"',
-        r"/channel/(UC[A-Za-z0-9_-]{22})",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, html)
-        if match:
-            return match.group(1)
-    return None
-
-
 def _extract_channel_id_from_input(youtube_channel: str) -> str | None:
     value = youtube_channel.strip()
     if _CHANNEL_ID_PATTERN.fullmatch(value):
@@ -897,29 +898,31 @@ def _extract_channel_handle_from_input(youtube_channel: str) -> str | None:
 
 
 def _fetch_channel_id_from_handle(channel_handle: str) -> str:
-    normalized_handle = channel_handle if channel_handle.startswith("@") else f"@{channel_handle}"
-    candidates = [
-        f"https://www.youtube.com/{normalized_handle}",
-        f"https://www.youtube.com/{normalized_handle}/videos",
-    ]
+    normalized = channel_handle if channel_handle.startswith("@") else f"@{channel_handle}"
+    channel_url = f"https://www.youtube.com/{normalized}"
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "playlistend": 1,
+        "skip_download": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(channel_url, download=False)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Could not resolve a valid YouTube channel ID from the provided channel value.",
+        ) from exc
 
-    headers = {"User-Agent": "Mozilla/5.0"}
-    for candidate_url in candidates:
-        request = Request(candidate_url, headers=headers)
-        try:
-            with urlopen(request, timeout=10) as response:  # nosec B310
-                html = response.read().decode("utf-8", errors="ignore")
-        except Exception:
-            continue
-
-        channel_id = _extract_channel_id_from_html(html)
-        if channel_id:
-            return channel_id
-
-    raise HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        detail="Could not resolve a valid YouTube channel ID from the provided channel value.",
-    )
+    channel_id = (info or {}).get("channel_id") or (info or {}).get("id") or ""
+    if not _CHANNEL_ID_PATTERN.fullmatch(channel_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Could not resolve a valid YouTube channel ID from the provided channel value.",
+        )
+    return channel_id
 
 
 def _resolve_youtube_channel_id(youtube_channel: str) -> str:
@@ -938,46 +941,42 @@ def _resolve_youtube_channel_id(youtube_channel: str) -> str:
 
 
 def _list_recent_channel_videos(channel_id: str, limit: int) -> list[_ChannelVideoCandidate]:
-    feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={quote_plus(channel_id)}"
-    request = Request(feed_url, headers={"User-Agent": "Mozilla/5.0"})
-
+    channel_url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "playlistend": limit,
+        "skip_download": True,
+    }
     try:
-        with urlopen(request, timeout=10) as response:  # nosec B310
-            raw_feed = response.read().decode("utf-8")
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(channel_url, download=False)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to fetch YouTube channel feed.",
+            detail="Failed to fetch YouTube channel videos.",
         ) from exc
 
-    try:
-        root = ElementTree.fromstring(raw_feed)
-    except ElementTree.ParseError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="YouTube channel feed response is invalid.",
-        ) from exc
-
-    ns = {
-        "atom": "http://www.w3.org/2005/Atom",
-        "yt": "http://www.youtube.com/xml/schemas/2015",
-    }
-    entries = root.findall("atom:entry", ns)
-
+    entries = (info or {}).get("entries") or []
     results: list[_ChannelVideoCandidate] = []
     for entry in entries[:limit]:
-        video_id = (entry.findtext("yt:videoId", default="", namespaces=ns) or "").strip()
+        if not entry:
+            continue
+        video_id = (entry.get("id") or "").strip()
         if not video_id:
             continue
 
-        raw_title = entry.findtext("atom:title", default=None, namespaces=ns)
-        title = raw_title.strip() if isinstance(raw_title, str) else None
-        if not title:
-            title = None
+        title = entry.get("title") or None
 
-        published_at = _parse_feed_datetime(
-            entry.findtext("atom:published", default=None, namespaces=ns)
-        )
+        published_at: datetime | None = None
+        upload_date = entry.get("upload_date")
+        if upload_date:
+            try:
+                published_at = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=None)
+            except ValueError:
+                pass
+
         results.append(
             _ChannelVideoCandidate(
                 video_id=video_id,
@@ -1025,7 +1024,7 @@ def _ingest_youtube_pipeline(
 ) -> IngestionYoutubeResponse:
     video_metadata = None
     try:
-        video_metadata = videos_service.fetch_youtube_oembed_metadata(data.video.video_url)
+        video_metadata = videos_service.fetch_youtube_metadata(data.video.video_url)
     except videos_service.YouTubeMetadataFetchError:
         logger.warning(
             "YouTube metadata fetch failed for url=%s, using payload data",

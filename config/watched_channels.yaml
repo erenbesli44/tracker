@@ -1,0 +1,20 @@
+# YouTube channels to watch daily.
+# Each entry needs either youtube_channel_id (UC...) or handle (@...).
+# video_count: how many recent videos to check per run.
+
+defaults:
+  video_count: 5
+  transcript_languages: ["tr", "en"]
+
+channels:
+  - handle: "@ATİLLAYEŞİLADA"
+    name: "Atilla Yeşilada"
+    video_count: 2
+# Example entries:
+#
+#  - youtube_channel_id: "UCxxxxxxxxxxxxxxxxxxxxxxxx"
+#    name: "Channel Name"
+#    video_count: 5
+#
+#  - handle: "@ChannelHandle"
+#    name: "Another Channel"

@@ -17,6 +17,10 @@ class YouTubeChannel(SQLModel, table=True):
     youtube_channel_id: Optional[str] = Field(default=None, max_length=100, index=True)
     channel_url: Optional[str] = Field(default=None, max_length=500)
     bio: Optional[str] = Field(default=None)
+    # Channel-level topic focus: slug of the main topic (e.g. "ekonomi")
+    primary_topic_slug: Optional[str] = Field(default=None, max_length=100)
+    # JSON array of expected subtopic slugs (e.g. '["bist","altin","dolar"]')
+    expected_subtopics: Optional[str] = Field(default=None)
     legacy_person_id: Optional[int] = Field(
         default=None,
         foreign_key="person.id",

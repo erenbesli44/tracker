@@ -38,6 +38,8 @@ def _build_prompt(
     source_url: str,
     transcript: str,
     output_language: str = "tr",
+    channel_primary_topic: str = "",
+    channel_expected_subtopics: str = "",
 ) -> str:
     values = {
         "source_platform": source_platform,
@@ -48,6 +50,8 @@ def _build_prompt(
         "source_url": source_url,
         "transcript": transcript,
         "output_language": output_language,
+        "channel_primary_topic": channel_primary_topic or "general",
+        "channel_expected_subtopics": channel_expected_subtopics or "none specified",
     }
     return _replace_placeholders(template, values)
 
@@ -268,6 +272,8 @@ def generate_analysis_json(
     source_url: str,
     transcript: str,
     output_language: str | None = None,
+    channel_primary_topic: str = "",
+    channel_expected_subtopics: str = "",
 ) -> dict[str, Any]:
     """Single merged call that returns both summary and classification."""
     prompt = _build_prompt(
@@ -280,5 +286,7 @@ def generate_analysis_json(
         source_url=source_url,
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
+        channel_primary_topic=channel_primary_topic,
+        channel_expected_subtopics=channel_expected_subtopics,
     )
     return _call_gemini_json(prompt)

@@ -1,230 +1,393 @@
-# Development Plan - YouTube Watch Cronjob
+# Development Plan - YouTube Watch Cronjob (v2)
 
-Status: Draft (development scope only)  
-Date: 2026-04-11  
+Status: Implemented
+Date: 2026-04-12
 Owner: Backend/API
 
 ## 1. Objective
 
-Implement a minimal scheduled YouTube watcher that:
+A daily background job that:
 
-1. polls tracked channels,
-2. detects newly published videos,
-3. ingests each new video safely (idempotent),
-4. fetches transcript,
-5. triggers existing pipeline steps.
+1. Reads a **config map** (YAML file) listing which YouTube channels to track.
+2. For each channel, detects newly published videos via yt-dlp.
+3. For each new video, runs the full ingestion pipeline: metadata fetch, transcript, LLM summary, topic classification.
+4. Logs run-level and channel-level results for diagnostics.
 
-This plan focuses only on application development. Deployment/orchestration setup is intentionally out of scope.
+Runs as a standalone CLI command: `python -m src.jobs.youtube_watch.runner`
 
-## 2. Current Baseline (from code)
+## 2. What Already Exists
 
-Available building blocks:
+### Available building blocks (no new code needed)
 
-1. One-shot ingestion endpoint and service (`POST /ingestions/youtube`).
-2. Transcript fetch path for existing videos (`POST /videos/{video_id}/transcript/fetch`).
-3. Video-level deduplication via unique `video.video_url`.
-4. Tracked channel identity can use `person.platform_handle` (`UC...` channel id).
+| Component | Location | What it does |
+|-----------|----------|-------------|
+| Single-video ingestion | `ingestion.service.ingest_youtube()` | Full pipeline: metadata → channel resolve → video create → transcript → LLM summary → classification |
+| Channel batch ingestion | `ingestion.service.ingest_youtube_channel()` | Lists recent videos via yt-dlp, skips existing, ingests new ones |
+| Video dedup | `video.video_url` unique constraint + `get_by_url()` / `get_by_video_id()` | Prevents duplicate video records |
+| Transcript fetch | `videos.service.fetch_transcript_from_youtube()` | youtube-transcript-api with language fallback |
+| YouTube metadata | `videos.service.fetch_youtube_metadata()` | Single yt-dlp call: title, author, channel_id, publish_date, duration |
+| Channel video listing | `ingestion.service._list_recent_channel_videos()` | yt-dlp flat-playlist extraction, no video count cap |
+| LLM analysis | `llm.service.generate_analysis_json()` | Gemini-powered summary + classification in one call |
+| Channel model | `channels.models.YouTubeChannel` | Has `youtube_channel_id`, `channel_handle`, topic metadata |
 
-Gap:
+### Key insight: minimal new code needed
 
-- No job module currently exists to poll channels and orchestrate end-to-end ingestion automatically.
+`ingest_youtube_channel()` already does 90% of what the job needs per channel. The job layer is a thin wrapper: **load config → iterate channels → call existing service → log results**.
 
-## 3. Target Module Layout (separate folder)
+## 3. Architecture
 
-New job area:
+```
+                    ┌─────────────────────────┐
+                    │  watched_channels.yaml   │  <-- config map
+                    │  (list of channels)      │
+                    └────────────┬─────────────┘
+                                 │
+                    ┌────────────▼─────────────┐
+                    │  runner.py                │  <-- CLI entrypoint
+                    │  - loads config           │
+                    │  - opens DB session       │
+                    │  - calls service.run_once │
+                    │  - exits with status code │
+                    └────────────┬─────────────┘
+                                 │
+                    ┌────────────▼─────────────┐
+                    │  service.py               │  <-- orchestration
+                    │  - iterates channels      │
+                    │  - per-channel: calls     │
+                    │    ingest_youtube_channel  │
+                    │  - aggregates results     │
+                    │  - persists run log       │
+                    └────────────┬─────────────┘
+                                 │
+          ┌──────────────────────┼──────────────────────┐
+          │                      │                      │
+  ┌───────▼───────┐    ┌────────▼────────┐    ┌────────▼────────┐
+  │ ingestion     │    │ videos.service   │    │ llm.service     │
+  │ .service      │    │ (transcript,     │    │ (summary +      │
+  │ (full pipe)   │    │  metadata)       │    │  classification) │
+  └───────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+## 4. Config Map Design
+
+### File: `config/watched_channels.yaml`
+
+```yaml
+# YouTube channels to poll daily.
+# Each entry needs either youtube_channel_id (UC...) or handle (@...).
+# video_count: how many recent videos to check per run (default: 5).
+
+channels:
+  - youtube_channel_id: "UCxxxxxxxxxxxxxxxxxxxxxxxx"
+    name: "Paragaranti"
+    video_count: 5
+
+  - handle: "@ChannelHandle"
+    name: "Another Channel"
+    video_count: 3
+
+  - handle: "@ThirdChannel"
+    name: "Third Channel"
+    # video_count defaults to 5
+
+defaults:
+  video_count: 5
+  transcript_languages: ["tr", "en"]
+```
+
+### Schema: `src/jobs/youtube_watch/schemas.py`
+
+```python
+@dataclass
+class WatchedChannel:
+    """One entry from the config map."""
+    name: str
+    youtube_channel_id: str | None = None
+    handle: str | None = None
+    video_count: int = 5
+    transcript_languages: list[str] | None = None
+
+@dataclass
+class WatchConfig:
+    """Parsed config map."""
+    channels: list[WatchedChannel]
+    defaults: WatchDefaults
+
+@dataclass
+class WatchDefaults:
+    video_count: int = 5
+    transcript_languages: list[str] = field(default_factory=lambda: ["tr", "en"])
+```
+
+### Config loading: `src/jobs/youtube_watch/config.py`
+
+- Reads `config/watched_channels.yaml` (path configurable via `WATCH_CONFIG_PATH` env var)
+- Validates each entry has at least `youtube_channel_id` or `handle`
+- Merges per-channel settings with defaults
+- Raises clear error if file missing or invalid
+
+## 5. Module Layout (updated)
 
 ```text
 src/jobs/
   __init__.py
-  README.md
   youtube_watch/
     __init__.py
-    README.md
-    runner.py
-    service.py
-    provider.py
-    repository.py
-    schemas.py
-    exceptions.py
+    runner.py        # CLI entrypoint
+    config.py        # NEW: YAML config loader + validation
+    service.py       # orchestration loop
+    schemas.py       # DTOs (config + run results)
+    models.py        # NEW: SQLModel tables for run logs
+    repository.py    # DB reads/writes for run logs
+    exceptions.py    # error taxonomy (already done)
+config/
+  watched_channels.yaml  # NEW: the config map
 ```
 
-Responsibilities:
+Changes from old plan:
+- **Added** `config.py` — dedicated config loader
+- **Added** `models.py` — SQLModel tables
+- **Removed** `provider.py` — not needed; `_list_recent_channel_videos()` in `ingestion.service` already handles yt-dlp calls
+- **Config map** replaces DB-driven channel discovery
 
-1. `runner.py`: entrypoint (`python -m src.jobs.youtube_watch.runner`), one-run lifecycle.
-2. `service.py`: channel loop, new-video decisions, orchestration.
-3. `provider.py`: YouTube data source integration.
-4. `repository.py`: DB access for tracked channels, watch state, run logs.
-5. `schemas.py`: typed DTOs for provider items and run summary.
-6. `exceptions.py`: typed error categories for retry policy.
+## 6. Persistence: Run Logs
 
-## 4. Data Source Strategy
+### Table: `youtube_watch_run` (new)
 
-Default strategy: YouTube channel feed (`videos.xml`) per channel id.
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INTEGER PK | auto-increment |
+| started_at | DATETIME NOT NULL | when run began |
+| finished_at | DATETIME | when run ended |
+| status | VARCHAR(20) NOT NULL | `success` / `partial_fail` / `failed` |
+| channels_scanned | INTEGER | total channels attempted |
+| videos_detected | INTEGER | total videos found across channels |
+| videos_ingested | INTEGER | successfully ingested |
+| videos_skipped | INTEGER | already existed |
+| errors_count | INTEGER | failed ingestions |
+| error_details | TEXT | JSON array of error summaries |
 
-Why:
+### Table: `youtube_watch_channel_result` (new)
 
-1. low complexity,
-2. low/no quota pressure compared to expensive search-based approaches,
-3. sufficient for periodic new-video detection.
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INTEGER PK | auto-increment |
+| run_id | INTEGER FK | references `youtube_watch_run.id` |
+| channel_identifier | VARCHAR(255) | handle or channel_id from config |
+| channel_name | VARCHAR(255) | from config |
+| youtube_channel_id | VARCHAR(100) | resolved UC... id |
+| videos_detected | INTEGER | |
+| videos_ingested | INTEGER | |
+| videos_skipped | INTEGER | |
+| errors_count | INTEGER | |
+| error_detail | TEXT | last error message if any |
+| status | VARCHAR(20) | `success` / `partial` / `failed` / `skipped` |
 
-Planned provider interface:
+No watch-state table needed. Dedup is handled by existing `video.video_url` unique constraint — re-running is inherently idempotent.
 
-1. `list_recent_videos(channel_id: str, limit: int) -> list[ProviderVideoItem]`
-2. `ProviderVideoItem` fields:
-   - `video_id`
-   - `video_url`
-   - `title`
-   - `published_at`
-   - `channel_id`
+## 7. Orchestration Flow
 
-## 5. Persistence Plan
+### `runner.py` — entrypoint
 
-Add minimal watcher state tables (SQLModel):
+```
+1. Load config from YAML
+2. Validate config (fail fast if invalid)
+3. Open DB session
+4. Call service.run_once(session, config)
+5. Log summary to stdout
+6. Return exit code: 0 = success, 1 = partial failures, 2 = total failure
+```
 
-1. `youtube_channel_watch_state`
-   - `id` (PK)
-   - `person_id` (FK `person.id`, unique/indexed)
-   - `channel_id` (indexed)
-   - `last_seen_video_published_at` (nullable datetime)
-   - `last_seen_video_id` (nullable)
-   - `last_polled_at` (nullable datetime)
-   - `last_success_at` (nullable datetime)
-   - `last_error` (nullable text)
-   - `updated_at` (datetime)
-2. `youtube_watch_job_run`
-   - `id` (PK)
-   - `started_at`, `finished_at`
-   - `status` (`success` / `partial_fail` / `failed`)
-   - `channels_scanned`
-   - `videos_detected`
-   - `videos_ingested`
-   - `videos_skipped`
-   - `errors_count`
-   - `error_summary` (nullable text)
+### `service.run_once(session, config)` — orchestration
 
-Notes:
+```
+1. Create youtube_watch_run record (started_at = now)
+2. For each channel in config.channels:
+   a. Resolve channel identifier to IngestionYoutubeChannelRunRequest
+   b. Call ingestion.service.ingest_youtube_channel(session, request)
+   c. Map result to youtube_watch_channel_result record
+   d. Accumulate counters
+   e. On exception: log error, record failure, continue to next channel
+3. Finalize run record (finished_at, status, counters)
+4. Return JobRunSummary
+```
 
-1. Keep `video.video_url` as canonical dedupe key.
-2. Do not store secrets in DB.
+### Per-channel flow (handled by existing `ingest_youtube_channel`)
 
-## 6. Orchestration Flow
+```
+1. Resolve youtube_channel_id (from config value or handle → yt-dlp lookup)
+2. List recent videos via yt-dlp flat-playlist (up to video_count)
+3. For each video:
+   a. Check if exists in DB → skip if yes
+   b. Fetch transcript from YouTube
+   c. Build IngestionYoutubeRequest with video + transcript
+   d. Call ingest_youtube() → full pipeline (metadata, channel, video, transcript, summary, classification)
+4. Return channel-level result with counters
+```
 
-For each run:
+## 8. Error Handling
 
-1. Create `youtube_watch_job_run` record with `started_at`.
-2. Query tracked channels:
-   - `person.platform = 'youtube'`
-   - `person.platform_handle IS NOT NULL`
-3. For each channel:
-   - fetch recent videos from provider,
-   - compare against watch state + existing `video.video_url`,
-   - keep only unseen candidates.
-4. For each unseen video:
-   - create/reuse video via `videos_service.create/get_by_url`,
-   - fetch transcript via `videos_service.fetch_transcript_from_youtube` + add/update transcript,
-   - trigger existing classification/summary pipeline step (manual/placeholder until full LLM phase),
-   - persist success/failure result.
-5. Update watch state (`last_polled_at`, last seen markers, last error).
-6. Finalize run record (`finished_at`, counters, status).
+### Channel-level isolation
 
-Idempotency rules:
+One channel failing must never crash the entire run. Each channel is wrapped in try/except:
 
-1. If video already exists by URL, mark as skipped.
-2. Re-running the same window must not duplicate video/transcript records.
-3. State updates occur after per-video processing outcome is known.
+- **Network/yt-dlp errors**: logged, channel marked `failed`, continue
+- **Transcript unavailable**: individual video marked `skipped_transcript_unavailable`, channel continues
+- **LLM failure**: fallback to auto-generated summary/classification (already handled in `_auto_fill_missing_analytics_for_new_video`)
+- **DB errors**: rollback channel transaction, log, continue
 
-## 7. Retry Policy
+### No retry at job level
 
-Retry only transient operations:
+The existing `ingest_youtube_channel` already handles per-video error isolation. The job runs daily, so transient failures will be retried on the next run (idempotent by design).
 
-1. provider fetch errors (network/timeout/5xx),
-2. temporary transcript provider failures.
+## 9. Settings
 
-Do not retry:
+Add to `src/config.py`:
 
-1. validation errors (invalid channel id/url),
-2. permanent transcript-unavailable errors.
+```python
+WATCH_CONFIG_PATH: str = "config/watched_channels.yaml"
+```
 
-Policy:
+No other new env vars needed — the job reuses existing `DATABASE_URL`, `GEMINI_API_KEY`, etc.
 
-1. max retries: 2
-2. backoff: 1s then 3s
-3. record final error in watch state + run log.
+## 10. Development Phases
 
-## 8. Development Phases
+### Phase 1: Config + Schemas
 
-### Phase A - Scaffold + Contracts
+1. Create `config/watched_channels.yaml` with initial channel list.
+2. Add config DTOs to `schemas.py` (`WatchedChannel`, `WatchConfig`, `WatchDefaults`).
+3. Implement `config.py` — YAML loader with validation.
+4. Add `WATCH_CONFIG_PATH` to `Settings`.
+5. Unit test: config loading, validation, defaults merging.
 
-1. add `src/jobs/youtube_watch/*` skeleton files.
-2. define DTOs and service interfaces.
-3. define error taxonomy and retry helper contract.
+### Phase 2: Run Log Persistence
 
-### Phase B - Persistence Layer
+1. Add `models.py` with `YouTubeWatchRun` and `YouTubeWatchChannelResult` SQLModel tables.
+2. Register models in startup import flow (`src/main.py`).
+3. Implement `repository.py` — create run, add channel result, finalize run.
+4. Add migration support in `database.py` if needed.
 
-1. implement SQLModel tables for watch state and job run logs.
-2. register models during startup import flow.
-3. implement repository CRUD helpers.
+### Phase 3: Service Orchestration
 
-### Phase C - Provider Layer
+1. Implement `service.run_once()`:
+   - Load config
+   - Iterate channels
+   - Call `ingest_youtube_channel()` per channel
+   - Map results to channel result records
+   - Create/finalize run record
+2. Return `JobRunSummary`.
+3. Integration test with mocked yt-dlp + transcript.
 
-1. implement channel feed client in `provider.py`.
-2. parse feed entries into typed DTOs.
-3. add robust parsing/error mapping tests.
+### Phase 4: Runner + CLI
 
-### Phase D - Job Service Orchestration
+1. Implement `runner.py`:
+   - Config loading
+   - DB session setup (import models, create tables)
+   - Call `service.run_once()`
+   - Structured logging output
+   - Exit code mapping
+2. Test end-to-end with `python -m src.jobs.youtube_watch.runner`.
 
-1. implement channel iteration and candidate filtering.
-2. implement per-video ingest + transcript sequence.
-3. implement retry wrapper and counters.
-4. finalize run summary object + persisted run row.
+### Phase 5: Tests
 
-### Phase E - Runner + Test Suite
+1. Config loading: valid YAML, missing file, invalid entries, defaults.
+2. Service orchestration: new video detected, duplicate skipped, transcript unavailable, channel failure isolation.
+3. Repository: run log creation, channel result persistence.
+4. Runner: exit codes, logging output.
 
-1. implement `runner.py` command entrypoint.
-2. add unit tests and focused integration tests.
-3. add development docs for local execution and troubleshooting.
+## 11. Test Scenarios
 
-## 9. Test Plan
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | New video detected | Video created, transcript stored, summary + classification generated, counters correct |
+| 2 | Duplicate video | Skipped, no duplicate rows, skip counter increments |
+| 3 | Transcript unavailable | Video may be skipped, error logged, run continues |
+| 4 | Channel yt-dlp failure | Channel marked failed, other channels still processed |
+| 5 | Empty config | Run completes with 0 channels scanned |
+| 6 | Invalid channel in config | Validation error at startup (fail fast) |
+| 7 | LLM failure | Fallback to auto-generated summary/classification |
+| 8 | Mixed outcomes across channels | Run status = `partial_fail`, individual results correct |
 
-Required scenarios:
+## 12. Deployment on Coolify
 
-1. New video detected:
-   - channel returns unseen video,
-   - video created + transcript stored,
-   - counters increment as expected.
-2. Duplicate video skipped:
-   - existing `video.video_url`,
-   - no duplicate rows,
-   - skip counter increments.
-3. Transcript unavailable:
-   - provider returns transcript-unavailable error,
-   - video may remain created,
-   - error logged without crashing full run.
-4. Partial failure + retry:
-   - first call fails transiently, second succeeds,
-   - retry count applied,
-   - final status success/partial_fail based on aggregate results.
+### Constraint: SQLite requires same-container execution
 
-Additional recommended scenarios:
+The API and the job **must share the same SQLite file** at `/data/tracker.db`. SQLite uses file-level locking — running a separate container against the same volume risks corruption under concurrent writes. Therefore the job runs **inside the existing API container**, not as a separate service.
 
-1. invalid channel id in `platform_handle`,
-2. feed parse error,
-3. empty channel feed,
-4. multi-channel mixed outcomes in one run.
+### Strategy: separate Coolify service (PostgreSQL — no file-locking constraint)
 
-## 10. Acceptance Criteria
+Because the project uses **PostgreSQL**, the job and the API connect independently to the same DB. No file-locking concern. The job runs as a **separate Coolify service** using the same Docker image with an overridden CMD.
 
-1. Single command runs one full polling cycle across all tracked channels.
-2. New videos are ingested once; reruns stay idempotent.
-3. Transient failures are retried with backoff.
-4. Run-level and channel-level outcomes are persisted for diagnostics.
-5. Tests cover the four required core scenarios.
+```
+┌─────────────────────────────────────────────────────┐
+│  Coolify                                            │
+│                                                     │
+│  tracker-api service          tracker-job service   │
+│  ┌──────────────────────┐    ┌─────────────────┐    │
+│  │ uvicorn src.main:app │    │ python -m       │    │
+│  │ (always running)     │    │  src.jobs.      │    │
+│  │                      │    │  youtube_watch. │    │
+│  │                      │    │  runner         │    │
+│  │                      │    │ (cron, exits)   │    │
+│  └──────────────────────┘    └─────────────────┘    │
+│           │                         │               │
+│           └──────────┬──────────────┘               │
+│                      │                              │
+│              PostgreSQL service                      │
+│              (tracker DB)                           │
+└─────────────────────────────────────────────────────┘
+```
 
-## 11. Immediate Next Build Tasks
+### Coolify setup steps
 
-1. Implement Phase A files with concrete interfaces.
-2. Implement persistence models and repository methods.
-3. Implement feed provider + parser.
-4. Implement orchestration service with retry helper.
-5. Add tests and validate with `pytest`.
+1. **Deploy the API service** as normal (same Docker image, CMD unchanged, port 8000).
+2. **Add a second service** from the same Docker image:
+   - Override CMD: `.venv/bin/python -m src.jobs.youtube_watch.runner`
+   - Set **Schedule** (cron): `0 8 * * *` (daily at 08:00 UTC)
+   - Set same env vars: `DATABASE_URL`, `GEMINI_API_KEY`, `WATCH_CONFIG_PATH` (optional)
+3. **Config file**: `config/watched_channels.yaml` is baked into the image at `COPY config/ config/`. Update the channel list by editing the file and redeploying.
 
+### Dockerfile change (already applied)
+
+```dockerfile
+COPY src/ src/
+COPY config/ config/   ← added
+COPY main.py ./
+```
+
+### Environment variables
+
+| Var | Required | Notes |
+|-----|----------|-------|
+| `DATABASE_URL` | Yes | Same Postgres URL as the API service |
+| `GEMINI_API_KEY` | Recommended | LLM falls back to keyword extraction if absent |
+| `WATCH_CONFIG_PATH` | No | Defaults to `config/watched_channels.yaml` |
+
+### Monitoring
+
+- **Exit codes**: 0 = success, 1 = partial failures, 2 = fatal failure. Coolify records these per run.
+- **Stdout logs**: Structured log lines visible in Coolify's container log panel.
+- **DB tables**: `youtube_watch_run` and `youtube_watch_channel_result` persist every run's outcome for diagnostics.
+
+## 13. Acceptance Criteria
+
+1. `python -m src.jobs.youtube_watch.runner` reads config and runs one full cycle.
+2. New videos are ingested with full pipeline (transcript + summary + classification).
+3. Already-ingested videos are skipped (idempotent).
+4. Channel failures don't crash the run.
+5. Run log persisted with per-channel results.
+6. Config changes (add/remove channels) take effect on next run (after redeploy).
+7. Tests cover the 8 scenarios in section 11.
+8. Dockerfile copies `config/` into the image.
+9. Job runs correctly via Coolify "Execute Command" scheduled task.
+
+## 14. Immediate Next Tasks
+
+1. Create `config/watched_channels.yaml` with real channels.
+2. Update `Dockerfile` to copy `config/` directory.
+3. Implement Phase 1 (config + schemas).
+4. Implement Phase 2 (persistence models + repository).
+5. Implement Phase 3 (service orchestration).
+6. Implement Phase 4 (runner CLI).
+7. Add tests and validate with `pytest`.
+8. Configure Coolify scheduled task after deploy.

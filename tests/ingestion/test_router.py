@@ -157,7 +157,7 @@ async def test_ingest_youtube_resolves_channel_from_metadata_without_person(
 
     monkeypatch.setattr(
         ingestion_service.videos_service,
-        "fetch_youtube_oembed_metadata",
+        "fetch_youtube_metadata",
         lambda _url: {
             "title": "Channel owned video",
             "author_name": "Atilla Yesilada",
@@ -210,7 +210,7 @@ async def test_ingest_youtube_relinks_existing_video_to_channel_owner(
     topic_id = await _topic_id_by_slug(client, "enflasyon")
     monkeypatch.setattr(
         ingestion_service.videos_service,
-        "fetch_youtube_oembed_metadata",
+        "fetch_youtube_metadata",
         lambda _url: {
             "title": "Correct owner video",
             "author_name": "Taner Genek",
@@ -303,7 +303,7 @@ async def test_ingest_youtube_channel_processes_last_n_and_skips_existing(
     )
     monkeypatch.setattr(
         ingestion_service.videos_service,
-        "fetch_youtube_oembed_metadata",
+        "fetch_youtube_metadata",
         lambda _url: {
             "title": "Channel video",
             "author_name": "Taner Genek",
@@ -385,7 +385,7 @@ async def test_ingest_youtube_channel_second_run_skips_already_extracted(
     )
     monkeypatch.setattr(
         ingestion_service.videos_service,
-        "fetch_youtube_oembed_metadata",
+        "fetch_youtube_metadata",
         lambda _url: {
             "title": "Channel video",
             "author_name": "Atilla Yesilada",
@@ -419,7 +419,7 @@ async def test_ingest_youtube_auto_generates_summary_and_classification_for_new_
 
     monkeypatch.setattr(
         ingestion_service.videos_service,
-        "fetch_youtube_oembed_metadata",
+        "fetch_youtube_metadata",
         lambda _url: {
             "title": "Auto analytics test video",
             "author_name": "Atilla Yesilada",
@@ -470,7 +470,7 @@ async def test_ingest_youtube_does_not_regenerate_analytics_for_reused_video(
 
     monkeypatch.setattr(
         ingestion_service.videos_service,
-        "fetch_youtube_oembed_metadata",
+        "fetch_youtube_metadata",
         lambda _url: {
             "title": "Auto analytics replay test",
             "author_name": "Atilla Yesilada",
