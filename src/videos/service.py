@@ -179,12 +179,12 @@ def fetch_publish_date_from_html(video_url: str) -> datetime | None:
     Looks for datePublished in JSON-LD or meta tags.
     """
     canonical = canonicalize_youtube_url(video_url)
-    request = Request(canonical, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urlopen(request, timeout=15) as response:  # nosec B310
-            html = response.read().decode("utf-8", errors="ignore")
-    except Exception:
-        return None
+    request = Request(canonical, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    with urlopen(request, timeout=15) as response:  # nosec B310
+        html = response.read().decode("utf-8", errors="ignore")
 
     # Match ISO 8601 datetimes: "2026-04-05T03:47:47-07:00" or "2026-04-05"
     for pattern in (
@@ -215,17 +215,23 @@ def backfill_published_dates(session: Session) -> list[dict]:
     results: list[dict] = []
     for video in videos:
         publish_date: datetime | None = None
+        errors: list[str] = []
 
         # Try yt-dlp first (most precise).
         try:
             metadata = fetch_youtube_metadata(video.video_url)
             publish_date = metadata.get("publish_date")
-        except YouTubeMetadataFetchError:
-            pass
+        except YouTubeMetadataFetchError as exc:
+            errors.append(f"yt-dlp: {exc.detail}")
 
         # Fall back to HTML parsing when yt-dlp fails.
         if publish_date is None:
-            publish_date = fetch_publish_date_from_html(video.video_url)
+            try:
+                publish_date = fetch_publish_date_from_html(video.video_url)
+                if publish_date is None:
+                    errors.append("html: no date found in page")
+            except Exception as exc:
+                errors.append(f"html: {exc}")
 
         if publish_date:
             video.published_at = publish_date
@@ -233,7 +239,7 @@ def backfill_published_dates(session: Session) -> list[dict]:
             session.flush()
             results.append({"video_id": video.id, "status": "updated", "published_at": publish_date.isoformat()})
         else:
-            results.append({"video_id": video.id, "status": "failed", "published_at": None})
+            results.append({"video_id": video.id, "status": "failed", "published_at": None, "errors": errors})
 
     if results:
         session.commit()
