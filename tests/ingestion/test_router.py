@@ -10,7 +10,7 @@ async def _topic_id_by_slug(client: AsyncClient, slug: str) -> int:
 
 
 async def test_ingest_youtube_full_create(client: AsyncClient):
-    topic_id = await _topic_id_by_slug(client, "borsa-istanbul")
+    topic_id = await _topic_id_by_slug(client, "bist-turk-piyasalari")
 
     response = await client.post(
         "/ingestions/youtube",
@@ -92,7 +92,7 @@ async def test_ingest_youtube_skips_transcript_when_exists_and_no_overwrite(clie
 
 
 async def test_ingest_youtube_overwrite_and_skip(client: AsyncClient):
-    topic_id = await _topic_id_by_slug(client, "borsa-istanbul")
+    topic_id = await _topic_id_by_slug(client, "bist-turk-piyasalari")
     initial = await client.post(
         "/ingestions/youtube",
         json={

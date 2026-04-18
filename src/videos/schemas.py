@@ -40,9 +40,16 @@ class VideoUpdate(CustomModel):
     duration: Optional[int] = Field(default=None, ge=0)
 
 
+class TranscriptSegment(CustomModel):
+    start: float = Field(ge=0)
+    duration: float = Field(ge=0)
+    text: str = Field(min_length=1)
+
+
 class TranscriptCreate(CustomModel):
     raw_text: str = Field(min_length=1)
     language: str = Field(default="tr", max_length=10)
+    segments: Optional[list[TranscriptSegment]] = None
 
 
 class TranscriptResponse(CustomModel):

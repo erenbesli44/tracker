@@ -2,8 +2,10 @@
 
 import json
 import logging
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from src.config import settings
@@ -12,7 +14,21 @@ logger = logging.getLogger(__name__)
 from src.llm.prompts import (
     ANALYSIS_PROMPT_TEMPLATE,
     CLASSIFICATION_PROMPT_TEMPLATE,
+    ECONOMIC_THESIS_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
+)
+
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+_RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
+_RETRYABLE_ERROR_PHRASES = (
+    "high demand",
+    "try again",
+    "rate limit",
+    "resource exhausted",
+    "temporarily unavailable",
+    "overloaded",
+    "backend error",
+    "service unavailable",
 )
 
 
@@ -39,7 +55,6 @@ def _build_prompt(
     transcript: str,
     output_language: str = "tr",
     channel_primary_topic: str = "",
-    channel_expected_subtopics: str = "",
 ) -> str:
     values = {
         "source_platform": source_platform,
@@ -51,7 +66,6 @@ def _build_prompt(
         "transcript": transcript,
         "output_language": output_language,
         "channel_primary_topic": channel_primary_topic or "general",
-        "channel_expected_subtopics": channel_expected_subtopics or "none specified",
     }
     return _replace_placeholders(template, values)
 
@@ -133,74 +147,152 @@ def _extract_text_from_gemini_response(payload: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
+def _compact_error_text(value: str) -> str:
+    return " ".join(value.split()).strip()
+
+
+def _read_http_error_body(exc: HTTPError, max_chars: int = 300) -> str:
+    try:
+        raw = exc.read()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    return _compact_error_text(text)[:max_chars]
+
+
+def _parse_retry_after_seconds(exc: HTTPError) -> float | None:
+    headers = getattr(exc, "headers", None)
+    if not headers:
+        return None
+    value = headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, seconds)
+
+
+def _is_retryable_http_error(status_code: int, body: str) -> bool:
+    if status_code in _RETRYABLE_HTTP_CODES:
+        return True
+    lower_body = body.lower()
+    return any(phrase in lower_body for phrase in _RETRYABLE_ERROR_PHRASES)
+
+
+def _retry_delay_seconds(attempt: int, retry_after: float | None) -> float:
+    if retry_after is not None:
+        return min(retry_after, settings.GEMINI_RETRY_MAX_DELAY_SECONDS)
+    base = max(0.1, float(settings.GEMINI_RETRY_BASE_DELAY_SECONDS))
+    max_delay = max(base, float(settings.GEMINI_RETRY_MAX_DELAY_SECONDS))
+    return min(max_delay, base * (2 ** (attempt - 1)))
+
+
 def _call_gemini_json(prompt: str) -> dict[str, Any]:
     if not settings.GEMINI_API_KEY:
         raise LLMGenerationError("GEMINI_API_KEY is not configured.")
 
-    model_candidates = []
-    for model_name in [
-        settings.GEMINI_MODEL,
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-    ]:
-        candidate = model_name.strip()
-        if candidate and candidate not in model_candidates:
-            model_candidates.append(candidate)
+    model_name = settings.GEMINI_MODEL.strip() or DEFAULT_GEMINI_MODEL
+    encoded_model = quote(model_name, safe="")
 
-    raw_response: str | None = None
-    last_error: Exception | None = None
-
+    max_attempts = max(1, int(settings.GEMINI_RETRY_MAX_ATTEMPTS))
     timeout_seconds = max(15, int(settings.GEMINI_TIMEOUT_SECONDS))
 
-    for model_name in model_candidates:
-        endpoint = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
-        )
-        request_payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "responseMimeType": "application/json",
-            },
-        }
-        body = json.dumps(request_payload).encode("utf-8")
-        request = Request(
-            endpoint,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{encoded_model}:generateContent?key={settings.GEMINI_API_KEY}"
+    )
+    request_payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        },
+    }
+    body = json.dumps(request_payload).encode("utf-8")
+    request = Request(
+        endpoint,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
 
+    raw_response = ""
+    for attempt in range(1, max_attempts + 1):
         try:
             with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310
                 raw_response = response.read().decode("utf-8")
-                logger.info("Gemini call succeeded with model=%s", model_name)
+                logger.info(
+                    "Gemini call succeeded with model=%s attempt=%d/%d",
+                    model_name,
+                    attempt,
+                    max_attempts,
+                )
                 break
         except TimeoutError as exc:
-            logger.warning("Gemini timeout with model=%s", model_name)
-            last_error = exc
-            continue
-        except HTTPError as exc:
-            last_error = exc
-            if exc.code in {400, 404}:
-                logger.warning("Gemini HTTP %d with model=%s, trying next", exc.code, model_name)
+            if attempt < max_attempts:
+                delay = _retry_delay_seconds(attempt, None)
+                logger.warning(
+                    "Gemini timeout with model=%s attempt=%d/%d; retrying in %.1fs",
+                    model_name,
+                    attempt,
+                    max_attempts,
+                    delay,
+                )
+                time.sleep(delay)
                 continue
-            logger.error("Gemini HTTP %d with model=%s", exc.code, model_name)
+            logger.warning("Gemini timeout with model=%s", model_name)
+            raise LLMGenerationError("Gemini timeout during generation.") from exc
+        except HTTPError as exc:
+            error_body = _read_http_error_body(exc)
+            retry_after = _parse_retry_after_seconds(exc)
+            retryable = _is_retryable_http_error(exc.code, error_body)
+            if retryable and attempt < max_attempts:
+                delay = _retry_delay_seconds(attempt, retry_after)
+                logger.warning(
+                    "Gemini HTTP %d with model=%s attempt=%d/%d; retrying in %.1fs; body=%s",
+                    exc.code,
+                    model_name,
+                    attempt,
+                    max_attempts,
+                    delay,
+                    error_body or "<empty>",
+                )
+                time.sleep(delay)
+                continue
+            logger.error(
+                "Gemini HTTP %d with model=%s; body=%s",
+                exc.code,
+                model_name,
+                error_body or "<empty>",
+            )
             raise LLMGenerationError("Gemini HTTP error during generation.") from exc
         except URLError as exc:
+            if attempt < max_attempts:
+                delay = _retry_delay_seconds(attempt, None)
+                logger.warning(
+                    "Gemini network error with model=%s attempt=%d/%d; retrying in %.1fs: %s",
+                    model_name,
+                    attempt,
+                    max_attempts,
+                    delay,
+                    exc.reason,
+                )
+                time.sleep(delay)
+                continue
             logger.error("Gemini network error: %s", exc.reason)
             raise LLMGenerationError("Gemini network error during generation.") from exc
         except Exception as exc:
             logger.error("Unexpected Gemini error: %s", exc)
             raise LLMGenerationError("Unexpected Gemini generation error.") from exc
 
-    if raw_response is None:
-        logger.error("All Gemini model candidates exhausted, last_error=%s", last_error)
-        if last_error is not None:
-            raise LLMGenerationError("Gemini model selection failed.") from last_error
+    if not raw_response:
         raise LLMGenerationError("Gemini generation returned no response.")
 
     try:
@@ -262,6 +354,31 @@ def generate_classification_json(
     return _call_gemini_json(prompt)
 
 
+def generate_economic_thesis_json(
+    *,
+    source_platform: str,
+    channel_name: str,
+    speaker_name: str,
+    video_title: str,
+    published_at: str,
+    source_url: str,
+    transcript: str,
+    output_language: str | None = None,
+) -> dict[str, Any]:
+    prompt = _build_prompt(
+        ECONOMIC_THESIS_PROMPT_TEMPLATE,
+        source_platform=source_platform,
+        channel_name=channel_name,
+        speaker_name=speaker_name,
+        video_title=video_title,
+        published_at=published_at,
+        source_url=source_url,
+        transcript=transcript,
+        output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
+    )
+    return _call_gemini_json(prompt)
+
+
 def generate_analysis_json(
     *,
     source_platform: str,
@@ -273,7 +390,6 @@ def generate_analysis_json(
     transcript: str,
     output_language: str | None = None,
     channel_primary_topic: str = "",
-    channel_expected_subtopics: str = "",
 ) -> dict[str, Any]:
     """Single merged call that returns both summary and classification."""
     prompt = _build_prompt(
@@ -287,6 +403,5 @@ def generate_analysis_json(
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
         channel_primary_topic=channel_primary_topic,
-        channel_expected_subtopics=channel_expected_subtopics,
     )
     return _call_gemini_json(prompt)

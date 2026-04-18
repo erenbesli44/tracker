@@ -27,6 +27,7 @@ class Transcript(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     video_id: int = Field(foreign_key="video.id", unique=True, index=True)
     raw_text: str
+    segments_json: Optional[str] = Field(default=None)  # JSON string of transcript segments
     language: str = Field(default="tr", max_length=10)
     created_at: datetime = Field(default_factory=utc_now)
 

@@ -1,10 +1,11 @@
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Body, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, status
 
 from src.channels import service as channels_service
 from src.channels.exceptions import ChannelNotFound
 from src.database import SessionDep
+from src.llm import service as llm_service
 from src.persons import service as persons_service
 from src.persons.exceptions import PersonNotFound
 from src.videos import service
@@ -193,6 +194,7 @@ def fetch_transcript(
             existing,
             raw_text=fetched["full_text"],
             language=fetched["language"],
+            segments=fetched["segments"],
         )
     else:
         transcript = service.add_transcript(
@@ -201,6 +203,7 @@ def fetch_transcript(
             TranscriptCreate(
                 raw_text=fetched["full_text"],
                 language=fetched["language"],
+                segments=fetched["segments"],
             ),
         )
 
@@ -212,3 +215,42 @@ def fetch_transcript(
         segment_count=len(fetched["segments"]),
         languages_tried=fetched["languages_tried"],
     )
+
+
+@router.post(
+    "/{video_id}/economic-thesis",
+    status_code=status.HTTP_200_OK,
+    summary="Extract economic thesis from video transcript using LLM",
+)
+def get_economic_thesis(
+    video: ValidVideoDep,
+    session: SessionDep,
+) -> dict[str, Any]:
+    transcript = service.get_transcript(session, video.id)
+    if not transcript:
+        raise TranscriptNotFound()
+
+    channel_name = "unknown"
+    if video.channel_id:
+        channel = channels_service.get_by_id(session, video.channel_id)
+        if channel:
+            channel_name = channel.name
+
+    speaker_name = channel_name
+    if video.person_id:
+        person = persons_service.get_by_id(session, video.person_id)
+        if person:
+            speaker_name = person.name
+
+    try:
+        return llm_service.generate_economic_thesis_json(
+            source_platform=video.platform,
+            channel_name=channel_name,
+            speaker_name=speaker_name,
+            video_title=video.title or "",
+            published_at=video.published_at.isoformat() if video.published_at else "",
+            source_url=video.video_url,
+            transcript=transcript.raw_text,
+        )
+    except llm_service.LLMGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

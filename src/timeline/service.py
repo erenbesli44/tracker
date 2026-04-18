@@ -63,12 +63,13 @@ def get_topic_timeline(
         session, {topic.parent_id} if topic.parent_id else set()
     )
 
+    sort_ts = func.coalesce(Video.published_at, TopicMention.created_at)
     stmt = (
         select(TopicMention, Video)
         .join(Video, TopicMention.video_id == Video.id)
         .where(TopicMention.person_id == person_id)
         .where(TopicMention.topic_id == topic_id)
-        .order_by(Video.published_at.desc().nullslast())
+        .order_by(sort_ts.desc(), TopicMention.id.desc())
         .offset(offset)
         .limit(limit)
     )
@@ -147,6 +148,7 @@ def _build_overview(
     # Query 3: latest mention per topic in a single query
     # Use a subquery to find the max published_at per topic, then join back.
     topic_ids = list(topics_by_id.keys())
+    sort_ts = func.coalesce(Video.published_at, TopicMention.created_at)
     latest_stmt = (
         select(TopicMention, Video)
         .join(Video, TopicMention.video_id == Video.id)
@@ -154,7 +156,8 @@ def _build_overview(
         .where(TopicMention.topic_id.in_(topic_ids))
         .order_by(
             TopicMention.topic_id,
-            Video.published_at.desc().nullslast(),
+            sort_ts.desc(),
+            TopicMention.id.desc(),
         )
     )
     latest_rows = session.execute(latest_stmt).all()
@@ -224,12 +227,13 @@ def get_channel_topic_timeline(
         session, {topic.parent_id} if topic.parent_id else set()
     )
 
+    sort_ts = func.coalesce(Video.published_at, TopicMention.created_at)
     stmt = (
         select(TopicMention, Video)
         .join(Video, TopicMention.video_id == Video.id)
         .where(TopicMention.channel_id == channel_id)
         .where(TopicMention.topic_id == topic_id)
-        .order_by(Video.published_at.desc().nullslast())
+        .order_by(sort_ts.desc(), TopicMention.id.desc())
         .offset(offset)
         .limit(limit)
     )

@@ -13,7 +13,7 @@ async def test_deep_pipeline_for_specific_video(client: AsyncClient, monkeypatch
     from src.ingestion import service as ingestion_service
 
     enflasyon_topic_id = await _topic_id_by_slug(client, "enflasyon")
-    borsa_topic_id = await _topic_id_by_slug(client, "borsa-istanbul")
+    borsa_topic_id = await _topic_id_by_slug(client, "bist-turk-piyasalari")
 
     monkeypatch.setattr(
         ingestion_service.videos_service,

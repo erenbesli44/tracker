@@ -21,6 +21,11 @@ class YouTubeChannel(SQLModel, table=True):
     primary_topic_slug: Optional[str] = Field(default=None, max_length=100)
     # JSON array of expected subtopic slugs (e.g. '["bist","altin","dolar"]')
     expected_subtopics: Optional[str] = Field(default=None)
+    # JSON blob of profile metadata pulled from YouTube (avatar, banner,
+    # subscriber_count, tags, is_verified, …). Stored as a string for the
+    # same reasons as expected_subtopics — keeps SQLite and Postgres schemas
+    # aligned without needing a JSONB column type.
+    channel_metadata: Optional[str] = Field(default=None)
     legacy_person_id: Optional[int] = Field(
         default=None,
         foreign_key="person.id",

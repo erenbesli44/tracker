@@ -13,6 +13,29 @@ channels:
   - handle: "@DevrimAkyıl"
     name: "Devrim Akyıl"
     video_count: 2
+  - handle: "@MeseleEkonomi"
+    name: "Mesele Ekonomi"
+    video_count: 2
+  - handle: "@EMRAHLAFCI"
+    name: "Emrah Lafçı"
+    video_count: 2
+  - handle: "@islammemisaltin"
+    name: "İslam Memiş"
+    video_count: 2
+  - handle: "@MuratMuratoğlu"
+    name: "Murat Muratoğlu"
+    video_count: 2
+  - handle: "@selçukgeçer"
+    name: "Selçuk Geçer"
+    video_count: 2
+  - handle: "@EkonomideSaadet"
+    name: "Saadet Büyük"
+    video_count: 2
+  - handle: "@KanalFinans"
+    name: "Tunç Şatıroğlu"
+    video_count: 2
+
+
 # Example entries:
 #
 #  - youtube_channel_id: "UCxxxxxxxxxxxxxxxxxxxxxxxx"

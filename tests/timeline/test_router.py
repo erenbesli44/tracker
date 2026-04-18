@@ -18,7 +18,7 @@ async def _build_timeline_fixture(client: AsyncClient) -> tuple[int, int, int, s
     channel_id = video_resp.json()["channel_id"]
     await client.post(f"/videos/{video_id}/transcript", json={"raw_text": "Transkript."})
 
-    topic_slug = "borsa-istanbul"
+    topic_slug = "bist-turk-piyasalari"
     topics_resp = await client.get("/topics/")
     topic_id = next(t["id"] for t in topics_resp.json() if t["slug"] == topic_slug)
     await client.post(

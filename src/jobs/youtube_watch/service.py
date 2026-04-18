@@ -6,6 +6,7 @@ import logging
 from fastapi import HTTPException
 from sqlmodel import Session
 
+from src.config import settings
 from src.ingestion import service as ingestion_service
 from src.ingestion.schemas import IngestionYoutubeChannelRunRequest
 from src.jobs.youtube_watch import repository
@@ -22,6 +23,11 @@ logger = logging.getLogger(__name__)
 def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
     """Execute one full polling cycle across all configured channels."""
     run = repository.create_run(session)
+    logger.info(
+        "YouTube proxy enabled=%s mode=%s",
+        settings.YOUTUBE_PROXY_ENABLED,
+        settings.YOUTUBE_PROXY_MODE,
+    )
     logger.info(
         "YouTube watch run started (id=%d, channels=%d)",
         run.id,

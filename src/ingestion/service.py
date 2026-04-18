@@ -4,9 +4,9 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from statistics import mean
+from typing import Any
 from urllib.parse import urlparse
 
-import yt_dlp
 from fastapi import HTTPException, status
 
 logger = logging.getLogger(__name__)
@@ -43,22 +43,57 @@ _CHANNEL_ID_FROM_TEXT_PATTERN = re.compile(r"(UC[A-Za-z0-9_-]{22})")
 _DEFAULT_SUMMARY_CHARS = 320
 _DEFAULT_LONG_SUMMARY_CHARS = 1200
 _DEFAULT_HIGHLIGHT_WORDS = 20
+# LLM output aliases -> canonical DB topic slugs.
+# Canonical slugs are the current (broadened) taxonomy. Old slugs and common
+# English variants stay as aliases so historical LLM outputs still resolve.
 _SUBTOPIC_TO_TOPIC_SLUG = {
-    "usd_try": "dolar",
-    "eur_try": "dolar",
+    # ── Canonical slugs (current taxonomy) ────────────────────────────────
+    "bist-turk-piyasalari": "bist-turk-piyasalari",
+    "altin": "altin",
+    "gumus": "gumus",
+    "doviz-kur": "doviz-kur",
+    "kripto-paralar": "kripto-paralar",
+    "amerikan-piyasalari": "amerikan-piyasalari",
+    "petrol-enerji": "petrol-enerji",
+    "faiz-para-politikasi": "faiz-para-politikasi",
+    "enflasyon": "enflasyon",
+    "ic-siyaset": "ic-siyaset",
+    "jeopolitik": "jeopolitik",
+    # ── Legacy Turkish slugs (pre-broadening) ─────────────────────────────
+    "borsa-istanbul": "bist-turk-piyasalari",
+    "dolar": "doviz-kur",
+    "bitcoin-kripto": "kripto-paralar",
+    "dow-jones": "amerikan-piyasalari",
+    "petrol": "petrol-enerji",
+    "faiz": "faiz-para-politikasi",
+    "dis-siyaset": "jeopolitik",
+    # ── English variants the LLM sometimes emits despite the prompt ───────
+    "usd_try": "doviz-kur",
+    "eur_try": "doviz-kur",
+    "fx": "doviz-kur",
+    "forex": "doviz-kur",
     "gold": "altin",
     "silver": "gumus",
-    "bist": "borsa-istanbul",
-    "deposit_rates": "faiz",
-    "interest_rates": "faiz",
-    "cbt_policy": "faiz",
+    "bist": "bist-turk-piyasalari",
+    "turkish_stocks": "bist-turk-piyasalari",
+    "deposit_rates": "faiz-para-politikasi",
+    "interest_rates": "faiz-para-politikasi",
+    "cbt_policy": "faiz-para-politikasi",
+    "monetary_policy": "faiz-para-politikasi",
     "inflation": "enflasyon",
-    "global_markets": "dow-jones",
-    "dow_jones": "dow-jones",
-    "nasdaq": "dow-jones",
-    "oil": "petrol",
-    "crypto": "bitcoin-kripto",
-    "foreign_policy": "dis-siyaset",
+    "global_markets": "amerikan-piyasalari",
+    "us_markets": "amerikan-piyasalari",
+    "wall_street": "amerikan-piyasalari",
+    "dow_jones": "amerikan-piyasalari",
+    "sp500": "amerikan-piyasalari",
+    "nasdaq": "amerikan-piyasalari",
+    "oil": "petrol-enerji",
+    "brent": "petrol-enerji",
+    "energy": "petrol-enerji",
+    "crypto": "kripto-paralar",
+    "bitcoin": "kripto-paralar",
+    "btc": "kripto-paralar",
+    "foreign_policy": "jeopolitik",
     "domestic_politics": "ic-siyaset",
     "geopolitics": "jeopolitik",
     "security": "jeopolitik",
@@ -69,11 +104,16 @@ _SUBTOPIC_TO_TOPIC_SLUG = {
     "leadership_statements": "ic-siyaset",
 }
 _MAIN_TOPIC_TO_TOPIC_SLUG = {
+    "ekonomi": "ekonomi",
     "economy_finance": "ekonomi",
+    "economy": "ekonomi",
     "business": "ekonomi",
+    "siyaset": "siyaset",
     "politics": "siyaset",
-    "international_relations": "dis-siyaset",
+    "spor": "spor",
+    "international_relations": "jeopolitik",
     "sports": "spor",
+    "teknoloji": "teknoloji",
     "technology": "teknoloji",
     "mixed": "ekonomi",
     "other": "ekonomi",
@@ -108,21 +148,60 @@ class _ChannelPlaylistInfo:
     candidates: list["_ChannelVideoCandidate"]
     channel_name: str | None
     channel_handle: str | None
+    profile: dict[str, Any] | None = None
 
 
 def _compact_whitespace(text: str) -> str:
     return " ".join(text.split()).strip()
 
 
-def _prepare_transcript_for_llm(raw_text: str, max_chars: int = 12000) -> str:
-    compact = _compact_whitespace(raw_text)
+def _format_timecode(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _render_segments_for_llm(segments: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for segment in segments:
+        text = _compact_whitespace(_safe_str(segment.get("text")))
+        if not text:
+            continue
+        start = max(0.0, _safe_unbounded_float(segment.get("start"), 0.0))
+        duration = max(0.0, _safe_unbounded_float(segment.get("duration"), 0.0))
+        end = start + duration
+        lines.append(f"[{_format_timecode(start)}-{_format_timecode(end)}] {text}")
+    return "\n".join(lines).strip()
+
+
+def _prepare_transcript_for_llm(
+    raw_text: str,
+    *,
+    transcript_segments: list[dict[str, Any]] | None = None,
+    max_chars: int = 12000,
+) -> str:
+    if transcript_segments:
+        rendered = _render_segments_for_llm(transcript_segments)
+        if rendered:
+            compact = rendered
+        else:
+            compact = _compact_whitespace(raw_text)
+    else:
+        compact = _compact_whitespace(raw_text)
     if len(compact) <= max_chars:
         return compact
 
-    head = compact[:5000].strip()
-    middle_start = max(0, len(compact) // 2 - 1000)
-    middle = compact[middle_start : middle_start + 2000].strip()
-    tail = compact[-5000:].strip()
+    head_chars = min(5000, max(1, int(max_chars * 0.42)))
+    middle_chars = min(2000, max(1, int(max_chars * 0.16)))
+    tail_chars = min(5000, max(1, max_chars - head_chars - middle_chars))
+
+    head = compact[:head_chars].strip()
+    middle_start = max(0, len(compact) // 2 - (middle_chars // 2))
+    middle = compact[middle_start : middle_start + middle_chars].strip()
+    tail = compact[-tail_chars:].strip()
     return "\n...\n".join([part for part in [head, middle, tail] if part])
 
 
@@ -163,6 +242,13 @@ def _safe_str(value: object, default: str = "") -> str:
     return default
 
 
+def _safe_unbounded_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _safe_float(value: object, default: float = 0.5) -> float:
     try:
         parsed = float(value)
@@ -173,6 +259,60 @@ def _safe_float(value: object, default: float = 0.5) -> float:
 
 def _clip_text(value: str, limit: int = 500) -> str:
     return value[:limit].strip()
+
+
+def _safe_str_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            if isinstance(item, (int, float)):
+                text = str(item).strip()
+            else:
+                text = _safe_str(item)
+            if text:
+                result.append(text)
+        return result
+    if isinstance(value, str):
+        text = _safe_str(value)
+        return [text] if text else []
+    return []
+
+
+def _parse_timecode_to_seconds(value: str) -> int | None:
+    if not value:
+        return None
+    parts = value.strip().split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        nums = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if len(nums) == 2:
+        minutes, seconds = nums
+        if minutes < 0 or seconds < 0 or seconds > 59:
+            return None
+        return minutes * 60 + seconds
+    hours, minutes, seconds = nums
+    if hours < 0 or minutes < 0 or seconds < 0 or minutes > 59 or seconds > 59:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _normalize_expected_subtopic_slug(value: str) -> str | None:
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized.startswith("other:"):
+        return None
+    return _SUBTOPIC_TO_TOPIC_SLUG.get(normalized)
+
+
+def _normalize_main_topic_slug(value: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized:
+        return "ekonomi"
+    return _MAIN_TOPIC_TO_TOPIC_SLUG.get(normalized, normalized)
 
 
 def _detect_sentiment(raw_text: str) -> str:
@@ -286,9 +426,9 @@ def _build_llm_metadata(
         published_at = raw_published.isoformat()
 
     # Channel-level topic context for the LLM prompt.
-    channel_primary_topic = _safe_str(getattr(channel, "primary_topic_slug", None))
-    subtopics_list = decode_subtopics(getattr(channel, "expected_subtopics", None))
-    channel_expected_subtopics = ", ".join(subtopics_list) if subtopics_list else ""
+    channel_primary_topic = _normalize_main_topic_slug(
+        _safe_str(getattr(channel, "primary_topic_slug", None))
+    )
 
     return {
         "source_platform": "youtube",
@@ -298,7 +438,6 @@ def _build_llm_metadata(
         "published_at": published_at or "unknown",
         "source_url": videos_service.canonicalize_youtube_url(data.video.video_url),
         "channel_primary_topic": channel_primary_topic,
-        "channel_expected_subtopics": channel_expected_subtopics,
     }
 
 
@@ -368,7 +507,9 @@ def _resolve_topic_slug_from_llm(
         return _MAIN_TOPIC_TO_TOPIC_SLUG[normalized_topic]
 
     normalized_primary = primary_topic.strip().lower()
-    return _MAIN_TOPIC_TO_TOPIC_SLUG.get(normalized_primary, "ekonomi")
+    if normalized_primary in _MAIN_TOPIC_TO_TOPIC_SLUG:
+        return _MAIN_TOPIC_TO_TOPIC_SLUG[normalized_primary]
+    return None
 
 
 def _classification_from_llm_payload(
@@ -388,6 +529,9 @@ def _classification_from_llm_payload(
         topic: str,
         summary: str,
         evidence: str,
+        key_levels: list[str],
+        start_time: str,
+        end_time: str,
         stance: str,
         confidence: float,
     ) -> None:
@@ -409,6 +553,9 @@ def _classification_from_llm_payload(
             topic_payload = {
                 "topic_name": topic_model.name,
                 "summaries": [],
+                "key_levels": [],
+                "start_seconds": [],
+                "end_seconds": [],
                 "stances": [],
                 "confidences": [],
             }
@@ -421,6 +568,24 @@ def _classification_from_llm_payload(
             summaries = topic_payload["summaries"]
             if isinstance(summaries, list):
                 summaries.append(content)
+
+        payload_key_levels = topic_payload["key_levels"]
+        if isinstance(payload_key_levels, list):
+            for level in key_levels:
+                level_text = _safe_str(level)
+                if level_text and level_text not in payload_key_levels:
+                    payload_key_levels.append(level_text)
+
+        start_seconds = _parse_timecode_to_seconds(start_time)
+        end_seconds = _parse_timecode_to_seconds(end_time)
+        if start_seconds is not None:
+            starts = topic_payload["start_seconds"]
+            if isinstance(starts, list):
+                starts.append(start_seconds)
+        if end_seconds is not None:
+            ends = topic_payload["end_seconds"]
+            if isinstance(ends, list):
+                ends.append(end_seconds)
 
         stances = topic_payload["stances"]
         if isinstance(stances, list):
@@ -440,6 +605,9 @@ def _classification_from_llm_payload(
                 topic=_safe_str(item.get("topic")),
                 summary=_safe_str(item.get("summary")),
                 evidence=_safe_str(item.get("evidence")),
+                key_levels=_safe_str_list(item.get("key_levels")),
+                start_time=_safe_str(item.get("start_time")),
+                end_time=_safe_str(item.get("end_time")),
                 stance=_safe_str(item.get("stance")),
                 confidence=_safe_float(item.get("confidence"), 0.6),
             )
@@ -454,6 +622,9 @@ def _classification_from_llm_payload(
                 topic=_safe_str(item.get("topic")),
                 summary=_safe_str(item.get("what_was_said")),
                 evidence=_safe_str(item.get("evidence")),
+                key_levels=_safe_str_list(item.get("key_levels")),
+                start_time=_safe_str(item.get("start_time")),
+                end_time=_safe_str(item.get("end_time")),
                 stance=_safe_str(item.get("stance")),
                 confidence=_safe_float(item.get("confidence"), 0.6),
             )
@@ -465,12 +636,22 @@ def _classification_from_llm_payload(
     for topic_id, values in grouped.items():
         topic_name = str(values.get("topic_name") or "Konu")
         summaries = values.get("summaries")
+        key_levels = values.get("key_levels")
+        start_seconds = values.get("start_seconds")
+        end_seconds = values.get("end_seconds")
         stances = values.get("stances")
         confidences = values.get("confidences")
         if not isinstance(summaries, list) or not summaries:
             mention_text = "Video içeriğinde bu konuya dair değerlendirme yapıldı."
         else:
-            mention_text = _clip_text(_safe_str(summaries[0]), 500)
+            merged: list[str] = []
+            for item in summaries:
+                text = _safe_str(item)
+                if text and text not in merged:
+                    merged.append(text)
+                if len(merged) >= 2:
+                    break
+            mention_text = _clip_text(" ".join(merged), 500)
 
         dominant_stance = "neutral"
         if isinstance(stances, list) and stances:
@@ -483,14 +664,26 @@ def _classification_from_llm_payload(
             if numeric:
                 avg_confidence = _safe_float(mean(numeric), 0.6)
 
+        start_time = None
+        if isinstance(start_seconds, list):
+            numeric_starts = [int(x) for x in start_seconds if isinstance(x, (int, float))]
+            if numeric_starts:
+                start_time = _format_timecode(float(min(numeric_starts)))
+
+        end_time = None
+        if isinstance(end_seconds, list):
+            numeric_ends = [int(x) for x in end_seconds if isinstance(x, (int, float))]
+            if numeric_ends:
+                end_time = _format_timecode(float(max(numeric_ends)))
+
         mentions.append(
             TopicMentionCreate(
                 topic_id=topic_id,
                 summary=f"{topic_name}: {mention_text}",
                 sentiment=sentiment,
-                key_levels=None,
-                start_time=None,
-                end_time=None,
+                key_levels=_safe_str_list(key_levels)[:8] or None,
+                start_time=start_time,
+                end_time=end_time,
                 confidence=round(avg_confidence, 2),
             )
         )
@@ -503,6 +696,7 @@ def _auto_fill_missing_analytics_for_new_video(
     data: IngestionYoutubeRequest,
     *,
     transcript_text: str,
+    transcript_segments: list[dict[str, Any]] | None,
     transcript_language: str,
     channel,
     video,
@@ -525,7 +719,10 @@ def _auto_fill_missing_analytics_for_new_video(
         video=video,
         video_metadata=video_metadata,
     )
-    llm_transcript = _prepare_transcript_for_llm(transcript_text)
+    llm_transcript = _prepare_transcript_for_llm(
+        transcript_text,
+        transcript_segments=transcript_segments,
+    )
 
     # Single merged LLM call for both summary and classification.
     llm_payload: dict | None = None
@@ -541,7 +738,6 @@ def _auto_fill_missing_analytics_for_new_video(
                 transcript=llm_transcript,
                 output_language=transcript_language,
                 channel_primary_topic=llm_meta["channel_primary_topic"],
-                channel_expected_subtopics=llm_meta["channel_expected_subtopics"],
             )
             logger.info("LLM analysis generated for video_url=%s", llm_meta["source_url"])
         except llm_service.LLMGenerationError:
@@ -759,6 +955,7 @@ def _resolve_transcript_input(
             return IngestionTranscriptInput(
                 raw_text=existing.raw_text,
                 language=existing.language,
+                segments=videos_service.parse_transcript_segments(existing.segments_json),
             )
 
     video_id = videos_service.extract_youtube_id(data.video.video_url)
@@ -782,6 +979,7 @@ def _resolve_transcript_input(
     return IngestionTranscriptInput(
         raw_text=fetched["full_text"],
         language=str(fetched.get("language", detected_lang or "en")),
+        segments=fetched.get("segments"),
     )
 
 
@@ -797,6 +995,7 @@ def _apply_transcript(session: Session, transcript_input: IngestionTranscriptInp
             transcript,
             raw_text=transcript_input.raw_text,
             language=transcript_input.language,
+            segments=transcript_input.segments,
         )
         return updated, "updated"
 
@@ -806,6 +1005,7 @@ def _apply_transcript(session: Session, transcript_input: IngestionTranscriptInp
         TranscriptCreate(
             raw_text=transcript_input.raw_text,
             language=transcript_input.language,
+            segments=transcript_input.segments,
         ),
     )
     return created, "created"
@@ -921,8 +1121,7 @@ def _fetch_channel_id_from_handle(channel_handle: str) -> str:
         "skip_download": True,
     }
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(channel_url, download=False)
+        info = videos_service.extract_info_with_yt_dlp(channel_url, opts)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -963,8 +1162,7 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
         "skip_download": True,
     }
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(channel_url, download=False)
+        info = videos_service.extract_info_with_yt_dlp(channel_url, opts)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -976,6 +1174,7 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
     channel_name: str | None = str(info.get("channel") or info.get("uploader") or "").strip() or None
     raw_handle = str(info.get("uploader_id") or "").strip()
     channel_handle: str | None = raw_handle if raw_handle else None
+    profile = videos_service.extract_channel_profile_from_info(info) if info else None
 
     entries = info.get("entries") or []
     candidates: list[_ChannelVideoCandidate] = []
@@ -1008,6 +1207,7 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
         candidates=candidates,
         channel_name=channel_name,
         channel_handle=channel_handle,
+        profile=profile,
     )
 
 
@@ -1079,6 +1279,7 @@ def _ingest_youtube_pipeline(
         session,
         data,
         transcript_text=transcript.raw_text,
+        transcript_segments=videos_service.parse_transcript_segments(transcript.segments_json),
         transcript_language=transcript.language,
         channel=channel,
         video=video,
@@ -1131,6 +1332,18 @@ def ingest_youtube_channel(
             "name": playlist_info.channel_name,
             "platform_handle": playlist_info.channel_handle,
         }
+
+    # Opportunistically attach the channel profile (avatar, banner, subs, …)
+    # to the existing DB channel — if we already know it. When the channel is
+    # brand new it will be created later during per-video ingestion and we
+    # enrich it again at the end of this function.
+    if playlist_info.profile:
+        _attach_channel_profile(
+            session,
+            youtube_channel_id=channel_id,
+            channel_handle=playlist_info.channel_handle,
+            profile=playlist_info.profile,
+        )
 
     videos_ingested = 0
     videos_skipped_existing = 0
@@ -1191,6 +1404,7 @@ def ingest_youtube_channel(
             transcript={
                 "raw_text": fetched_transcript["full_text"],
                 "language": str(fetched_transcript.get("language", "tr")),
+                "segments": fetched_transcript.get("segments"),
             },
             overwrite={"transcript": True, "summary": True, "classification": True},
         )
@@ -1241,6 +1455,18 @@ def ingest_youtube_channel(
             )
         )
 
+    # After the per-video loop the channel is guaranteed to exist if any
+    # video was ingested. Re-attempt profile enrichment so a newly-created
+    # channel also gets avatar/banner/sub data attached.
+    if playlist_info.profile:
+        _attach_channel_profile(
+            session,
+            youtube_channel_id=channel_id,
+            channel_handle=playlist_info.channel_handle,
+            profile=playlist_info.profile,
+        )
+        session.commit()
+
     return IngestionYoutubeChannelRunResponse(
         status="partial" if errors_count > 0 else "completed",
         youtube_channel_id=channel_id,
@@ -1252,3 +1478,21 @@ def ingest_youtube_channel(
         errors_count=errors_count,
         results=results,
     )
+
+
+def _attach_channel_profile(
+    session: Session,
+    *,
+    youtube_channel_id: str | None,
+    channel_handle: str | None,
+    profile: dict[str, Any],
+) -> None:
+    """Look up the DB channel by youtube_channel_id / handle and merge profile data."""
+    db_channel = None
+    if youtube_channel_id:
+        db_channel = channels_service.get_by_youtube_channel_id(session, youtube_channel_id)
+    if db_channel is None and channel_handle:
+        db_channel = channels_service.get_by_channel_handle(session, channel_handle)
+    if db_channel is None:
+        return
+    channels_service.upsert_profile_metadata(session, db_channel, profile)

@@ -15,7 +15,7 @@ async def _setup(client: AsyncClient) -> tuple[int, int, int]:
     video_id = video_resp.json()["id"]
     await client.post(f"/videos/{video_id}/transcript", json={"raw_text": "Transkript içeriği."})
     topics_resp = await client.get("/topics/")
-    topic_id = next(t["id"] for t in topics_resp.json() if t["slug"] == "borsa-istanbul")
+    topic_id = next(t["id"] for t in topics_resp.json() if t["slug"] == "bist-turk-piyasalari")
     return person_id, video_id, topic_id
 
 

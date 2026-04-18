@@ -1,16 +1,13 @@
 from fastapi import APIRouter, status
 
 from src.classification import service
-from src.classification.constants import (
-    CLASSIFICATION_SYSTEM_PROMPT,
-    CLASSIFICATION_USER_PROMPT_TEMPLATE,
-)
 from src.classification.schemas import (
     ClassificationRequest,
     ClassificationResponse,
     PromptTemplateResponse,
 )
 from src.database import SessionDep
+from src.llm.prompts import ANALYSIS_PROMPT_TEMPLATE
 from src.videos.dependencies import ValidVideoDep
 
 router = APIRouter(prefix="/videos", tags=["classification"])
@@ -48,6 +45,6 @@ def get_classification(video: ValidVideoDep, session: SessionDep) -> Classificat
 )
 def get_prompt_template() -> PromptTemplateResponse:
     return PromptTemplateResponse(
-        system_prompt=CLASSIFICATION_SYSTEM_PROMPT,
-        user_prompt_template=CLASSIFICATION_USER_PROMPT_TEMPLATE,
+        system_prompt="",
+        user_prompt_template=ANALYSIS_PROMPT_TEMPLATE,
     )

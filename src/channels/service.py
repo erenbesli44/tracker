@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from slugify import slugify
 from sqlmodel import Session, select
@@ -25,6 +26,22 @@ def decode_subtopics(raw: str | None) -> list[str] | None:
         return None
 
 
+def _encode_channel_metadata(metadata: dict[str, Any] | None) -> str | None:
+    if metadata is None:
+        return None
+    return json.dumps(metadata, ensure_ascii=False)
+
+
+def decode_channel_metadata(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def create(session: Session, data: ChannelCreate) -> YouTubeChannel:
     slug = slugify(data.name)
     channel = YouTubeChannel(
@@ -37,6 +54,7 @@ def create(session: Session, data: ChannelCreate) -> YouTubeChannel:
         bio=data.bio,
         primary_topic_slug=data.primary_topic_slug,
         expected_subtopics=_encode_subtopics(data.expected_subtopics),
+        channel_metadata=_encode_channel_metadata(data.channel_metadata),
         legacy_person_id=data.legacy_person_id,
     )
     session.add(channel)
@@ -79,6 +97,8 @@ def update(session: Session, channel: YouTubeChannel, data: ChannelUpdate) -> Yo
     update_data = data.model_dump(exclude_unset=True)
     if "expected_subtopics" in update_data:
         update_data["expected_subtopics"] = _encode_subtopics(update_data["expected_subtopics"])
+    if "channel_metadata" in update_data:
+        update_data["channel_metadata"] = _encode_channel_metadata(update_data["channel_metadata"])
     for key, value in update_data.items():
         setattr(channel, key, value)
 
@@ -89,6 +109,55 @@ def update(session: Session, channel: YouTubeChannel, data: ChannelUpdate) -> Yo
     session.add(channel)
     session.commit()
     session.refresh(channel)
+    return channel
+
+
+def upsert_profile_metadata(
+    session: Session,
+    channel: YouTubeChannel,
+    profile: dict[str, Any],
+    *,
+    fill_bio: bool = True,
+    fill_channel_url: bool = True,
+    fill_youtube_channel_id: bool = True,
+) -> YouTubeChannel:
+    """Merge yt-dlp-derived profile data into a channel row.
+
+    ``profile`` is the dict produced by ``extract_channel_profile_from_info``.
+    Non-destructive for existing values — only fills missing scalar fields.
+    """
+    changed = False
+
+    existing = decode_channel_metadata(channel.channel_metadata) or {}
+    merged = {**existing, **{k: v for k, v in profile.items() if v is not None}}
+    encoded = _encode_channel_metadata(merged)
+    if encoded != channel.channel_metadata:
+        channel.channel_metadata = encoded
+        changed = True
+
+    if fill_youtube_channel_id:
+        profile_channel_id = profile.get("youtube_channel_id")
+        if profile_channel_id and not channel.youtube_channel_id:
+            channel.youtube_channel_id = profile_channel_id
+            changed = True
+
+    if fill_channel_url:
+        profile_channel_url = profile.get("channel_url")
+        if profile_channel_url and not channel.channel_url:
+            channel.channel_url = profile_channel_url
+            changed = True
+
+    if fill_bio:
+        profile_description = profile.get("description")
+        if profile_description and not channel.bio:
+            channel.bio = profile_description
+            changed = True
+
+    if changed:
+        channel.updated_at = datetime.now(UTC).replace(tzinfo=None)
+        session.add(channel)
+        session.flush()
+        session.refresh(channel)
     return channel
 
 

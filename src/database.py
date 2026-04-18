@@ -1,3 +1,4 @@
+import json
 from typing import Annotated
 
 from fastapi import Depends
@@ -165,7 +166,281 @@ def _run_postgres_migrations(session: Session) -> None:
     session.exec(
         text("ALTER TABLE youtube_channel ADD COLUMN IF NOT EXISTS expected_subtopics VARCHAR")
     )
+    session.exec(
+        text("ALTER TABLE youtube_channel ADD COLUMN IF NOT EXISTS channel_metadata VARCHAR")
+    )
+    session.exec(
+        text("ALTER TABLE transcript ADD COLUMN IF NOT EXISTS segments_json VARCHAR")
+    )
+    _merge_dis_siyaset_into_jeopolitik(session)
+    _apply_broadened_taxonomy_migration(session)
     session.commit()
+
+
+def _replace_channel_subtopic_slug(
+    session: Session,
+    old_slug: str,
+    new_slug: str,
+) -> None:
+    rows = session.exec(
+        text(
+            """
+            SELECT id, expected_subtopics
+            FROM youtube_channel
+            WHERE expected_subtopics IS NOT NULL
+              AND expected_subtopics != ''
+            """
+        )
+    ).all()
+
+    for row in rows:
+        channel_id = row[0]
+        raw_expected_subtopics = row[1]
+
+        if not isinstance(raw_expected_subtopics, str):
+            continue
+
+        try:
+            parsed = json.loads(raw_expected_subtopics)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        if not isinstance(parsed, list):
+            continue
+
+        changed = False
+        rewritten: list[str] = []
+        for item in parsed:
+            if not isinstance(item, str):
+                continue
+
+            normalized = item.strip()
+            if not normalized:
+                continue
+
+            if normalized == old_slug:
+                normalized = new_slug
+                changed = True
+
+            if normalized not in rewritten:
+                rewritten.append(normalized)
+
+        if not changed:
+            continue
+
+        session.execute(
+            text(
+                """
+                UPDATE youtube_channel
+                SET expected_subtopics = :expected_subtopics
+                WHERE id = :channel_id
+                """
+            ),
+            {
+                "expected_subtopics": json.dumps(rewritten, ensure_ascii=False),
+                "channel_id": channel_id,
+            },
+        )
+
+
+# Old slug -> (new slug, new name, new description). Used by the broadened-
+# taxonomy migration to rename rows in place (topic_mention.topic_id stays
+# valid because we only UPDATE slug/name/description, never delete rows).
+_BROADENED_TAXONOMY_RENAMES: list[tuple[str, str, str, str]] = [
+    (
+        "borsa-istanbul",
+        "bist-turk-piyasalari",
+        "BIST / Türk Piyasaları",
+        "BIST, XU100, XU030, hisse, endeks, banka/sanayi hisseleri, yerli borsa",
+    ),
+    (
+        "dolar",
+        "doviz-kur",
+        "Döviz ve Kur",
+        "USD/TRY, EUR/TRY, GBP/TRY, EUR/USD, DXY, parite, döviz kuru",
+    ),
+    (
+        "bitcoin-kripto",
+        "kripto-paralar",
+        "Kripto Paralar",
+        "Bitcoin/BTC, Ethereum/ETH, altcoin, stablecoin, kripto borsaları",
+    ),
+    (
+        "dow-jones",
+        "amerikan-piyasalari",
+        "Amerikan Piyasaları",
+        "Dow Jones, S&P 500, Nasdaq, Wall Street, ABD borsaları, US futures, Magnificent 7",
+    ),
+    (
+        "petrol",
+        "petrol-enerji",
+        "Petrol ve Enerji",
+        "Brent, WTI, ham petrol, doğalgaz, OPEC, enerji fiyatları",
+    ),
+    (
+        "faiz",
+        "faiz-para-politikasi",
+        "Faiz ve Para Politikası",
+        "TCMB/Fed/ECB faizi, mevduat, repo, politika faizi, tahvil faizleri",
+    ),
+]
+
+
+def _rename_topic_to_broadened_taxonomy(
+    session: Session,
+    old_slug: str,
+    new_slug: str,
+    new_name: str,
+    new_description: str,
+) -> None:
+    """Rename a topic row in place and rewrite channel expected_subtopics refs.
+
+    If a row with the new slug already exists (e.g. the seed inserted it while
+    the old row also lingers), merge by repointing topic_mention and deleting
+    the old row — same pattern as _merge_dis_siyaset_into_jeopolitik.
+    """
+    old_row = session.execute(
+        text("SELECT id FROM topic WHERE slug = :slug LIMIT 1"),
+        {"slug": old_slug},
+    ).first()
+    new_row = session.execute(
+        text("SELECT id FROM topic WHERE slug = :slug LIMIT 1"),
+        {"slug": new_slug},
+    ).first()
+
+    _replace_channel_subtopic_slug(session, old_slug=old_slug, new_slug=new_slug)
+
+    old_topic_id = int(old_row[0]) if old_row else None
+    new_topic_id = int(new_row[0]) if new_row else None
+
+    if old_topic_id is None and new_topic_id is None:
+        return
+
+    if old_topic_id is None:
+        # Only the new row exists — ensure its name/description are up to date.
+        session.execute(
+            text(
+                """
+                UPDATE topic
+                SET name = :name, description = :description
+                WHERE id = :id
+                """
+            ),
+            {"id": new_topic_id, "name": new_name, "description": new_description},
+        )
+        return
+
+    if new_topic_id is None:
+        # Only the old row exists — rename in place.
+        session.execute(
+            text(
+                """
+                UPDATE topic
+                SET slug = :new_slug, name = :name, description = :description
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": old_topic_id,
+                "new_slug": new_slug,
+                "name": new_name,
+                "description": new_description,
+            },
+        )
+        return
+
+    if old_topic_id == new_topic_id:
+        return
+
+    # Both rows exist — merge old into new.
+    session.execute(
+        text("UPDATE topic_mention SET topic_id = :new_id WHERE topic_id = :old_id"),
+        {"new_id": new_topic_id, "old_id": old_topic_id},
+    )
+    session.execute(
+        text(
+            """
+            UPDATE topic
+            SET name = :name, description = :description
+            WHERE id = :id
+            """
+        ),
+        {"id": new_topic_id, "name": new_name, "description": new_description},
+    )
+    session.execute(
+        text("DELETE FROM topic WHERE id = :id"),
+        {"id": old_topic_id},
+    )
+
+
+def _apply_broadened_taxonomy_migration(session: Session) -> None:
+    for old_slug, new_slug, new_name, new_description in _BROADENED_TAXONOMY_RENAMES:
+        _rename_topic_to_broadened_taxonomy(
+            session,
+            old_slug=old_slug,
+            new_slug=new_slug,
+            new_name=new_name,
+            new_description=new_description,
+        )
+
+
+def _merge_dis_siyaset_into_jeopolitik(session: Session) -> None:
+    """Normalize legacy `dis-siyaset` references into `jeopolitik`."""
+    session.exec(
+        text(
+            """
+            UPDATE youtube_channel
+            SET primary_topic_slug = 'jeopolitik'
+            WHERE primary_topic_slug = 'dis-siyaset'
+            """
+        )
+    )
+    _replace_channel_subtopic_slug(session, old_slug="dis-siyaset", new_slug="jeopolitik")
+
+    dis_row = session.exec(text("SELECT id FROM topic WHERE slug = 'dis-siyaset' LIMIT 1")).first()
+    jeopolitik_row = session.exec(text("SELECT id FROM topic WHERE slug = 'jeopolitik' LIMIT 1")).first()
+
+    dis_topic_id = int(dis_row[0]) if dis_row else None
+    jeopolitik_topic_id = int(jeopolitik_row[0]) if jeopolitik_row else None
+
+    if dis_topic_id is None:
+        return
+
+    if jeopolitik_topic_id is None:
+        session.execute(
+            text(
+                """
+                UPDATE topic
+                SET name = 'Jeopolitik',
+                    slug = 'jeopolitik',
+                    description = 'Dış siyaset, savaş, uluslararası krizler'
+                WHERE id = :dis_topic_id
+                """
+            ),
+            {"dis_topic_id": dis_topic_id},
+        )
+        return
+
+    if dis_topic_id == jeopolitik_topic_id:
+        return
+
+    session.execute(
+        text(
+            """
+            UPDATE topic_mention
+            SET topic_id = :jeopolitik_topic_id
+            WHERE topic_id = :dis_topic_id
+            """
+        ),
+        {
+            "jeopolitik_topic_id": jeopolitik_topic_id,
+            "dis_topic_id": dis_topic_id,
+        },
+    )
+    session.execute(
+        text("DELETE FROM topic WHERE id = :dis_topic_id"),
+        {"dis_topic_id": dis_topic_id},
+    )
 
 
 def run_lightweight_migrations() -> None:
@@ -184,6 +459,9 @@ def run_lightweight_migrations() -> None:
 
         if not _sqlite_has_column(session, "topic_mention", "channel_id"):
             session.exec(text("ALTER TABLE topic_mention ADD COLUMN channel_id INTEGER"))
+
+        if not _sqlite_has_column(session, "transcript", "segments_json"):
+            session.exec(text("ALTER TABLE transcript ADD COLUMN segments_json VARCHAR"))
 
         # Finalize migration: make legacy person references optional.
         video_person_not_null = _sqlite_is_not_null_column(session, "video", "person_id")
@@ -204,6 +482,10 @@ def run_lightweight_migrations() -> None:
         if not _sqlite_has_column(session, "youtube_channel", "expected_subtopics"):
             session.exec(
                 text("ALTER TABLE youtube_channel ADD COLUMN expected_subtopics VARCHAR")
+            )
+        if not _sqlite_has_column(session, "youtube_channel", "channel_metadata"):
+            session.exec(
+                text("ALTER TABLE youtube_channel ADD COLUMN channel_metadata VARCHAR")
             )
 
         _ensure_post_rebuild_indexes(session)
@@ -260,4 +542,7 @@ def run_lightweight_migrations() -> None:
                 """
             )
         )
+
+        _merge_dis_siyaset_into_jeopolitik(session)
+        _apply_broadened_taxonomy_migration(session)
         session.commit()

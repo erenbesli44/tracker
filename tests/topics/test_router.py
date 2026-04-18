@@ -16,10 +16,10 @@ async def test_topic_tree_has_sub_topics(client: AsyncClient):
     tree = response.json()
     ekonomi = next(t for t in tree if t["slug"] == "ekonomi")
     sub_slugs = [s["slug"] for s in ekonomi["sub_topics"]]
-    assert "borsa-istanbul" in sub_slugs
+    assert "bist-turk-piyasalari" in sub_slugs
     assert "altin" in sub_slugs
     assert "gumus" in sub_slugs
-    assert "bitcoin-kripto" in sub_slugs
+    assert "kripto-paralar" in sub_slugs
 
 
 async def test_list_topics(client: AsyncClient):

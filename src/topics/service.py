@@ -130,16 +130,20 @@ def get_topic_opinions_by_channel(
     if days is not None:
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
-    # Query 1: count mentions per channel
+    # Use published_at when available; fall back to mention created_at.
+    sort_ts = func.coalesce(Video.published_at, TopicMention.created_at)
+
+    # Query 1: count mentions per channel, ordered by latest activity datetime
     count_stmt = (
         select(TopicMention.channel_id, func.count(TopicMention.id).label("cnt"))
+        .join(Video, TopicMention.video_id == Video.id)
         .where(TopicMention.topic_id == topic.id)
         .where(TopicMention.channel_id.isnot(None))
     )
     if cutoff:
         count_stmt = count_stmt.where(TopicMention.created_at >= cutoff)
     count_stmt = count_stmt.group_by(TopicMention.channel_id).order_by(
-        func.max(TopicMention.created_at).desc()
+        func.max(sort_ts).desc()
     )
     count_rows = session.execute(count_stmt).all()
 
@@ -171,7 +175,9 @@ def get_topic_opinions_by_channel(
     if cutoff:
         mentions_stmt = mentions_stmt.where(TopicMention.created_at >= cutoff)
     mentions_stmt = mentions_stmt.order_by(
-        TopicMention.channel_id, Video.published_at.desc().nullslast()
+        TopicMention.channel_id,
+        sort_ts.desc(),
+        TopicMention.id.desc(),
     )
     mention_rows = session.execute(mentions_stmt).all()
 
