@@ -216,6 +216,7 @@ def _call_local_llm_json(prompt: str) -> dict[str, Any]:
     request_payload = {
         "model": model_name,
         "stream": False,
+        "max_tokens": 4096,
         "messages": [
             {"role": "user", "content": prompt},
         ],
