@@ -58,6 +58,7 @@ from src.videos.router import router as videos_router  # noqa: E402
 from src.classification.router import router as classification_router  # noqa: E402
 from src.timeline.router import router as timeline_router  # noqa: E402
 from src.ingestion.router import router as ingestion_router  # noqa: E402
+from src.jobs.youtube_watch.router import router as youtube_watch_router  # noqa: E402
 
 app.include_router(persons_router)
 app.include_router(topics_router)
@@ -66,6 +67,7 @@ app.include_router(videos_router)
 app.include_router(classification_router)
 app.include_router(timeline_router)
 app.include_router(ingestion_router)
+app.include_router(youtube_watch_router)
 
 
 @app.get("/health", tags=["health"])
