@@ -131,6 +131,12 @@ def _extract_text_from_gemini_response(payload: dict[str, Any]) -> str:
     if not isinstance(candidates, list) or not candidates:
         raise LLMGenerationError("Gemini response has no candidates.")
 
+    finish_reason = candidates[0].get("finishReason")
+    if isinstance(finish_reason, str) and finish_reason.upper() in {"MAX_TOKENS", "LENGTH"}:
+        raise LLMGenerationError(
+            f"Gemini truncated output (finishReason={finish_reason}); falling back."
+        )
+
     content = candidates[0].get("content")
     if not isinstance(content, dict):
         raise LLMGenerationError("Gemini response content is missing.")
@@ -200,7 +206,13 @@ def _extract_text_from_openai_completion(completion: Any) -> str:
     choices = getattr(completion, "choices", None) or []
     if not choices:
         raise LLMGenerationError("MiniMax response has no choices.")
-    message = getattr(choices[0], "message", None)
+    choice = choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason == "length":
+        raise LLMGenerationError(
+            "MiniMax truncated output (finish_reason=length); falling back."
+        )
+    message = getattr(choice, "message", None)
     content = getattr(message, "content", None) if message is not None else None
     if not isinstance(content, str) or not content.strip():
         raise LLMGenerationError("MiniMax response has no text content.")

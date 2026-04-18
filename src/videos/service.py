@@ -14,6 +14,7 @@ import yt_dlp
 
 logger = logging.getLogger(__name__)
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import (
@@ -555,7 +556,19 @@ def create(session: Session, data: VideoCreate) -> Video:
         duration=data.duration,
     )
     session.add(video)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = get_by_url(session, canonical_url)
+        if existing is None:
+            raise
+        logger.warning(
+            "Race on video_url=%s; reusing existing id=%s instead of inserting",
+            canonical_url,
+            existing.id,
+        )
+        return existing
     session.refresh(video)
     return video
 
