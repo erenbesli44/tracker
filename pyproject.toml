@@ -14,6 +14,7 @@ dependencies = [
     "yt-dlp>=2026.3.17",
     "psycopg2-binary>=2.9.0",
     "pyyaml>=6.0.3",
+    "openai>=1.55.0",
 ]
 
 [project.optional-dependencies]

@@ -13,9 +13,13 @@ class Settings(BaseSettings):
     GEMINI_RETRY_BASE_DELAY_SECONDS: float = 1.5
     GEMINI_RETRY_MAX_DELAY_SECONDS: float = 20.0
     LLM_DEFAULT_OUTPUT_LANGUAGE: str = "tr"
-    LOCAL_LLM_BASE_URL: str | None = None  # OpenAI-compatible endpoint for local env
-    LOCAL_LLM_TOKEN: str | None = None
-    LOCAL_LLM_MODEL: str = "minimax-m2.7"
+    MINIMAX_BASE_URL: str | None = None  # OpenAI-compatible, e.g. https://api.minimax.io/v1
+    MINIMAX_API_KEY: str | None = None
+    MINIMAX_MODEL: str = "MiniMax-M2.7"
+    MINIMAX_SYSTEM_PROMPT: str = (
+        "You are a helpful assistant that always responds with a single valid "
+        "JSON object and no surrounding prose."
+    )
     YOUTUBE_PROXY_ENABLED: bool = False
     YOUTUBE_PROXY_MODE: str = "direct"  # direct | rotating
     YOUTUBE_PROXY_RETRIES: int = 3

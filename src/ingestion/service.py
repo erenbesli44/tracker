@@ -128,11 +128,10 @@ _STANCE_TO_SENTIMENT = {
 
 
 def _llm_generation_enabled() -> bool:
-    if not settings.GEMINI_API_KEY:
-        return False
     if os.getenv("PYTEST_CURRENT_TEST"):
         return False
-    return True
+    has_minimax = bool(settings.MINIMAX_BASE_URL and settings.MINIMAX_API_KEY)
+    return bool(has_minimax or settings.GEMINI_API_KEY)
 
 
 @dataclass
