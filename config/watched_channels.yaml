@@ -37,6 +37,9 @@ channels:
   - handle: "@HaticeKolçak"
     name: "Hatice Kolçak"
     video_count: 2
+  - handle: "@barissoydan"
+    name: "Barış Soydan"
+    video_count: 2
 
 
 # Example entries:
