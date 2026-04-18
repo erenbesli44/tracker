@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     GEMINI_RETRY_BASE_DELAY_SECONDS: float = 1.5
     GEMINI_RETRY_MAX_DELAY_SECONDS: float = 20.0
     LLM_DEFAULT_OUTPUT_LANGUAGE: str = "tr"
+    LOCAL_LLM_BASE_URL: str | None = None  # OpenAI-compatible endpoint for local env
+    LOCAL_LLM_TOKEN: str | None = None
+    LOCAL_LLM_MODEL: str = "minimax-m2.7"
     YOUTUBE_PROXY_ENABLED: bool = False
     YOUTUBE_PROXY_MODE: str = "direct"  # direct | rotating
     YOUTUBE_PROXY_RETRIES: int = 3

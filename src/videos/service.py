@@ -211,9 +211,20 @@ def _select_proxy_url(force_rotate: bool = False) -> tuple[str | None, str | Non
     return _select_direct_proxy(force_rotate=force_rotate)
 
 
+def _no_ssl_session() -> "requests.Session":
+    import requests
+    session = requests.Session()
+    session.verify = False
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    return session
+
+
 def _build_transcript_client(force_rotate: bool = False) -> tuple[YouTubeTranscriptApi, str | None]:
+    http_client = _no_ssl_session()
+
     if not _proxy_enabled():
-        return YouTubeTranscriptApi(), None
+        return YouTubeTranscriptApi(http_client=http_client), None
 
     mode = (settings.YOUTUBE_PROXY_MODE or "direct").strip().lower()
     if mode == "rotating":
@@ -224,13 +235,13 @@ def _build_transcript_client(force_rotate: bool = False) -> tuple[YouTubeTranscr
         locations = _parse_csv(settings.WEBSHARE_PROXY_FILTER_IP_LOCATIONS)
         if locations:
             kwargs["filter_ip_locations"] = locations
-        return YouTubeTranscriptApi(proxy_config=WebshareProxyConfig(**kwargs)), "webshare-rotating"
+        return YouTubeTranscriptApi(proxy_config=WebshareProxyConfig(**kwargs), http_client=http_client), "webshare-rotating"
 
     proxy_url, proxy_label = _select_proxy_url(force_rotate=force_rotate)
     if proxy_url:
         proxy_config = GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
-        return YouTubeTranscriptApi(proxy_config=proxy_config), proxy_label
-    return YouTubeTranscriptApi(), None
+        return YouTubeTranscriptApi(proxy_config=proxy_config, http_client=http_client), proxy_label
+    return YouTubeTranscriptApi(http_client=http_client), None
 
 
 def _is_retryable_provider_error(exc: Exception) -> bool:
@@ -256,6 +267,7 @@ def _extract_info_with_yt_dlp(url: str, opts: dict[str, Any]) -> dict[str, Any]:
     for attempt in range(attempts):
         proxy_url, proxy_label = _select_proxy_url(force_rotate=attempt > 0)
         attempt_opts = dict(opts)
+        attempt_opts["nocheckcertificate"] = True
         if proxy_url:
             attempt_opts["proxy"] = proxy_url
 
@@ -342,6 +354,8 @@ def fetch_youtube_metadata(video_url: str) -> dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
+        "extractor_args": {"youtube": {"lang": ["tr"]}},
+        "http_headers": {"Accept-Language": "tr-TR,tr;q=0.9"},
     }
     try:
         info = _extract_info_with_yt_dlp(canonical_url, opts)
@@ -514,6 +528,8 @@ def fetch_channel_profile(channel_input: str) -> dict[str, Any]:
         "extract_flat": True,
         "playlistend": 1,
         "skip_download": True,
+        "extractor_args": {"youtube": {"lang": ["tr"]}},
+        "http_headers": {"Accept-Language": "tr-TR,tr;q=0.9"},
     }
     try:
         info = _extract_info_with_yt_dlp(url, opts)

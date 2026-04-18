@@ -1119,6 +1119,8 @@ def _fetch_channel_id_from_handle(channel_handle: str) -> str:
         "extract_flat": True,
         "playlistend": 1,
         "skip_download": True,
+        "extractor_args": {"youtube": {"lang": ["tr"]}},
+        "http_headers": {"Accept-Language": "tr-TR,tr;q=0.9"},
     }
     try:
         info = videos_service.extract_info_with_yt_dlp(channel_url, opts)
@@ -1160,6 +1162,8 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
         "extract_flat": True,
         "playlistend": limit,
         "skip_download": True,
+        "extractor_args": {"youtube": {"lang": ["tr"]}},
+        "http_headers": {"Accept-Language": "tr-TR,tr;q=0.9"},
     }
     try:
         info = videos_service.extract_info_with_yt_dlp(channel_url, opts)

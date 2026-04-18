@@ -194,6 +194,98 @@ def _retry_delay_seconds(attempt: int, retry_after: float | None) -> float:
     return min(max_delay, base * (2 ** (attempt - 1)))
 
 
+def _extract_text_from_openai_response(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise LLMGenerationError("OpenAI-compatible response has no choices.")
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise LLMGenerationError("OpenAI-compatible response has no content.")
+    return content.strip()
+
+
+def _call_local_llm_json(prompt: str) -> dict[str, Any]:
+    if not settings.LOCAL_LLM_BASE_URL or not settings.LOCAL_LLM_TOKEN:
+        raise LLMGenerationError("LOCAL_LLM_BASE_URL and LOCAL_LLM_TOKEN must be configured.")
+
+    model_name = settings.LOCAL_LLM_MODEL or "minimax-m2.7"
+    max_attempts = max(1, int(settings.GEMINI_RETRY_MAX_ATTEMPTS))
+    timeout_seconds = max(15, int(settings.GEMINI_TIMEOUT_SECONDS))
+
+    request_payload = {
+        "model": model_name,
+        "stream": False,
+        "messages": [
+            {"role": "user", "content": prompt},
+        ],
+    }
+    body = json.dumps(request_payload).encode("utf-8")
+    endpoint = settings.LOCAL_LLM_BASE_URL.rstrip("/")
+    request = Request(
+        endpoint,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.LOCAL_LLM_TOKEN}",
+        },
+        method="POST",
+    )
+
+    raw_response = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urlopen(request, timeout=timeout_seconds, context=ctx) as response:  # nosec B310
+                raw_response = response.read().decode("utf-8")
+            logger.info("Local LLM call succeeded model=%s attempt=%d/%d", model_name, attempt, max_attempts)
+            break
+        except TimeoutError as exc:
+            if attempt < max_attempts:
+                delay = _retry_delay_seconds(attempt, None)
+                time.sleep(delay)
+                continue
+            raise LLMGenerationError("Local LLM timeout.") from exc
+        except HTTPError as exc:
+            error_body = _read_http_error_body(exc)
+            retryable = _is_retryable_http_error(exc.code, error_body)
+            if retryable and attempt < max_attempts:
+                delay = _retry_delay_seconds(attempt, _parse_retry_after_seconds(exc))
+                logger.warning("Local LLM HTTP %d attempt=%d/%d retrying in %.1fs", exc.code, attempt, max_attempts, delay)
+                time.sleep(delay)
+                continue
+            logger.error("Local LLM HTTP %d; body=%s", exc.code, error_body)
+            raise LLMGenerationError("Local LLM HTTP error.") from exc
+        except URLError as exc:
+            if attempt < max_attempts:
+                delay = _retry_delay_seconds(attempt, None)
+                time.sleep(delay)
+                continue
+            raise LLMGenerationError("Local LLM network error.") from exc
+
+    if not raw_response:
+        raise LLMGenerationError("Local LLM returned no response.")
+
+    try:
+        payload = json.loads(raw_response)
+    except json.JSONDecodeError as exc:
+        raise LLMGenerationError("Local LLM response is not valid JSON.") from exc
+
+    content_text = _extract_text_from_openai_response(payload)
+    return _extract_json_payload(content_text)
+
+
+def _is_local_llm_configured() -> bool:
+    return bool(
+        settings.ENVIRONMENT == "local"
+        and settings.LOCAL_LLM_BASE_URL
+        and settings.LOCAL_LLM_TOKEN
+    )
+
+
 def _call_gemini_json(prompt: str) -> dict[str, Any]:
     if not settings.GEMINI_API_KEY:
         raise LLMGenerationError("GEMINI_API_KEY is not configured.")
@@ -304,6 +396,12 @@ def _call_gemini_json(prompt: str) -> dict[str, Any]:
     return _extract_json_payload(content_text)
 
 
+def _call_llm_json(prompt: str) -> dict[str, Any]:
+    if _is_local_llm_configured():
+        return _call_local_llm_json(prompt)
+    return _call_llm_json(prompt)
+
+
 def generate_summary_json(
     *,
     source_platform: str,
@@ -326,7 +424,7 @@ def generate_summary_json(
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
     )
-    return _call_gemini_json(prompt)
+    return _call_llm_json(prompt)
 
 
 def generate_classification_json(
@@ -351,7 +449,7 @@ def generate_classification_json(
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
     )
-    return _call_gemini_json(prompt)
+    return _call_llm_json(prompt)
 
 
 def generate_economic_thesis_json(
@@ -376,7 +474,7 @@ def generate_economic_thesis_json(
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
     )
-    return _call_gemini_json(prompt)
+    return _call_llm_json(prompt)
 
 
 def generate_analysis_json(
@@ -404,4 +502,4 @@ def generate_analysis_json(
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
         channel_primary_topic=channel_primary_topic,
     )
-    return _call_gemini_json(prompt)
+    return _call_llm_json(prompt)
