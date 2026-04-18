@@ -130,8 +130,7 @@ _STANCE_TO_SENTIMENT = {
 def _llm_generation_enabled() -> bool:
     if os.getenv("PYTEST_CURRENT_TEST"):
         return False
-    has_minimax = bool(settings.MINIMAX_BASE_URL and settings.MINIMAX_API_KEY)
-    return bool(has_minimax or settings.GEMINI_API_KEY)
+    return bool(settings.MINIMAX_BASE_URL and settings.MINIMAX_API_KEY)
 
 
 @dataclass
@@ -724,49 +723,45 @@ def _auto_fill_missing_analytics_for_new_video(
     )
 
     # Single merged LLM call for both summary and classification.
-    llm_payload: dict | None = None
-    if _llm_generation_enabled() and (needs_summary or needs_classification):
-        try:
-            llm_payload = llm_service.generate_analysis_json(
-                source_platform=llm_meta["source_platform"],
-                channel_name=llm_meta["channel_name"],
-                speaker_name=llm_meta["speaker_name"],
-                video_title=llm_meta["video_title"],
-                published_at=llm_meta["published_at"],
-                source_url=llm_meta["source_url"],
-                transcript=llm_transcript,
-                output_language=transcript_language,
-                channel_primary_topic=llm_meta["channel_primary_topic"],
-            )
-            logger.info("LLM analysis generated for video_url=%s", llm_meta["source_url"])
-        except llm_service.LLMGenerationError:
-            logger.warning(
-                "LLM analysis failed for video_url=%s, falling back to auto-generation",
-                llm_meta["source_url"],
-                exc_info=True,
-            )
-            llm_payload = None
+    # Policy: MiniMax-only. If it fails, log and leave summary/classification
+    # empty — the next scheduled run will retry, since needs_summary /
+    # needs_classification become True again when the rows are still missing.
+    if not _llm_generation_enabled():
+        logger.error(
+            "LLM is not configured; skipping analysis for video_url=%s",
+            llm_meta["source_url"],
+        )
+        return
+
+    try:
+        llm_payload = llm_service.generate_analysis_json(
+            source_platform=llm_meta["source_platform"],
+            channel_name=llm_meta["channel_name"],
+            speaker_name=llm_meta["speaker_name"],
+            video_title=llm_meta["video_title"],
+            published_at=llm_meta["published_at"],
+            source_url=llm_meta["source_url"],
+            transcript=llm_transcript,
+            output_language=transcript_language,
+            channel_primary_topic=llm_meta["channel_primary_topic"],
+        )
+        logger.info("LLM analysis generated for video_url=%s", llm_meta["source_url"])
+    except llm_service.LLMGenerationError:
+        logger.error(
+            "LLM analysis failed for video_url=%s; skipping (will retry next run)",
+            llm_meta["source_url"],
+            exc_info=True,
+        )
+        return
 
     if needs_summary:
-        llm_summary: IngestionSummaryInput | None = None
-        if llm_payload is not None:
-            llm_summary = _summary_from_llm_payload(
-                llm_payload,
-                transcript_language=transcript_language,
-            )
-        data.summary = llm_summary or _auto_summary_from_transcript(
-            transcript_text,
-            transcript_language,
+        data.summary = _summary_from_llm_payload(
+            llm_payload,
+            transcript_language=transcript_language,
         )
 
     if needs_classification:
-        llm_classification: IngestionClassificationInput | None = None
-        if llm_payload is not None:
-            llm_classification = _classification_from_llm_payload(session, llm_payload)
-        data.classification = llm_classification or _auto_classification_from_transcript(
-            session,
-            transcript_text,
-        )
+        data.classification = _classification_from_llm_payload(session, llm_payload)
 
 
 def _resolve_channel(

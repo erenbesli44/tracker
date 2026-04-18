@@ -432,9 +432,11 @@ def _call_gemini_json(prompt: str) -> dict[str, Any]:
 
 
 def _call_llm_json(prompt: str) -> dict[str, Any]:
-    if _is_minimax_configured():
-        return _call_minimax_json(prompt)
-    return _call_gemini_json(prompt)
+    if not _is_minimax_configured():
+        raise LLMGenerationError(
+            "MiniMax is not configured (MINIMAX_BASE_URL / MINIMAX_API_KEY missing)."
+        )
+    return _call_minimax_json(prompt)
 
 
 def generate_summary_json(

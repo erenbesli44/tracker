@@ -420,9 +420,11 @@ async def test_ingest_youtube_channel_second_run_skips_already_extracted(
     assert transcript_fetch_calls["count"] == 2
 
 
-async def test_ingest_youtube_auto_generates_summary_and_classification_for_new_video(
+async def test_ingest_youtube_skips_analytics_when_llm_unavailable(
     client: AsyncClient, monkeypatch
 ):
+    # Policy: when the LLM is not reachable (or not configured), do NOT fall
+    # back to transcript-based auto-generation. The next scheduled run retries.
     from src.ingestion import service as ingestion_service
 
     monkeypatch.setattr(
@@ -457,24 +459,26 @@ async def test_ingest_youtube_auto_generates_summary_and_classification_for_new_
     assert response.status_code == 200
     payload = response.json()
     assert payload["actions"]["video"] == "created"
-    assert payload["actions"]["summary"] == "created"
-    assert payload["actions"]["classification"] == "created"
-    assert payload["summary_id"] is not None
-    assert payload["classification_mentions"] >= 1
+    # Summary + classification skipped — no LLM available and no fallback by design.
+    assert payload["actions"]["summary"] == "skipped"
+    assert payload["actions"]["classification"] == "skipped"
+    assert payload["summary_id"] is None
+    assert payload["classification_mentions"] == 0
 
     summary_resp = await client.get(f"/videos/{payload['video_id']}/summary")
-    assert summary_resp.status_code == 200
-    assert summary_resp.json()["short_summary"]
+    assert summary_resp.status_code == 404
 
     classification_resp = await client.get(f"/videos/{payload['video_id']}/classification")
-    assert classification_resp.status_code == 200
-    assert classification_resp.json()["total_mentions"] >= 1
+    assert classification_resp.status_code == 404
 
 
 async def test_ingest_youtube_does_not_regenerate_analytics_for_reused_video(
     client: AsyncClient, monkeypatch
 ):
     from src.ingestion import service as ingestion_service
+    from src.topics import service as topics_service
+    from src.database import engine
+    from sqlmodel import Session
 
     monkeypatch.setattr(
         ingestion_service.videos_service,
@@ -486,6 +490,13 @@ async def test_ingest_youtube_does_not_regenerate_analytics_for_reused_video(
         },
     )
 
+    # Pull a real topic id so the payload validates against TopicMentionCreate.
+    with Session(engine) as s:
+        topic = topics_service.get_by_slug(s, "ekonomi") or topics_service.list_all(s)[0]
+        topic_id = topic.id
+
+    # Seed the first run with summary + classification provided in the request
+    # (no LLM needed). The second run should reuse the existing rows.
     first = await client.post(
         "/ingestions/youtube",
         json={
@@ -494,6 +505,16 @@ async def test_ingest_youtube_does_not_regenerate_analytics_for_reused_video(
             "transcript": {
                 "raw_text": "İlk transcript. Enflasyon ve faiz konuşuldu.",
                 "language": "tr",
+            },
+            "summary": {
+                "short_summary": "Enflasyon ve faiz üzerine bir değerlendirme.",
+                "language": "tr",
+                "source": "manual",
+            },
+            "classification": {
+                "topic_mentions": [
+                    {"topic_id": topic_id, "summary": "Enflasyon ve faiz.", "confidence": 0.9}
+                ],
             },
             "overwrite": {"transcript": True, "summary": True, "classification": True},
         },
