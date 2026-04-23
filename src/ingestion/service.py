@@ -1373,15 +1373,21 @@ def ingest_youtube_channel(
                 data.transcript_languages,
             )
         except videos_service.YouTubeTranscriptFetchError as exc:
-            logger.warning(
-                "Transcript unavailable for video_id=%s (code=%s): %s",
+            # Only provider_error (transient infra / proxy issue) counts as an error.
+            # transcript_unavailable + video_unavailable are permanent properties of the
+            # video (no captions, members-only, private, age-restricted) — just skip them.
+            is_hard_failure = exc.code == "provider_error"
+            log_fn = logger.warning if is_hard_failure else logger.info
+            log_fn(
+                "Transcript skipped for video_id=%s (code=%s): %s",
                 candidate.video_id,
                 exc.code,
                 exc.detail,
-                exc_info=True,
+                exc_info=is_hard_failure,
             )
             videos_skipped_no_transcript += 1
-            errors_count += 1
+            if is_hard_failure:
+                errors_count += 1
             results.append(
                 IngestionYoutubeChannelRunVideoResult(
                     youtube_video_id=candidate.video_id,

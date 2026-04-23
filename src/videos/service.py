@@ -37,12 +37,15 @@ from src.videos.schemas import (
 
 DEFAULT_TRANSCRIPT_LANGUAGES = ["tr", "en"]
 
-try:
-    from youtube_transcript_api._errors import IpBlocked, RequestBlocked
-
-    _TRANSCRIPT_BLOCK_ERRORS: tuple[type[Exception], ...] = (IpBlocked, RequestBlocked)
-except ImportError:
-    _TRANSCRIPT_BLOCK_ERRORS = ()
+_transcript_retryable: list[type[Exception]] = []
+for _err_name in ("IpBlocked", "RequestBlocked", "VideoUnplayable"):
+    try:
+        _transcript_retryable.append(
+            getattr(__import__("youtube_transcript_api._errors", fromlist=[_err_name]), _err_name)
+        )
+    except (ImportError, AttributeError):
+        pass
+_TRANSCRIPT_BLOCK_ERRORS: tuple[type[Exception], ...] = tuple(_transcript_retryable)
 
 _PROXY_STATE_LOCK = threading.Lock()
 _PROXY_CURSOR = 0
@@ -81,59 +84,75 @@ def _proxy_enabled() -> bool:
 
 
 def _refresh_webshare_inventory(force: bool = False) -> None:
-    """Pull live proxy list + credentials from the Webshare API into the cache.
+    """Pull live proxy credentials (+ direct-mode IP list) from the Webshare API.
 
     No-op when WEBSHARE_API_KEY is unset. Cache is TTL-gated unless force=True.
+    In rotating mode we only need credentials (p.webshare.io handles rotation),
+    so we skip the /proxy/list/ call — which also returns 400 on residential plans.
     Failures are logged and swallowed — the caller falls back to env-var config.
     """
     if not settings.WEBSHARE_API_KEY:
         return
 
     ttl = max(60, int(settings.WEBSHARE_API_CACHE_TTL_SECONDS))
+    mode = (settings.YOUTUBE_PROXY_MODE or "direct").strip().lower()
     with _WEBSHARE_CACHE_LOCK:
         now = time.time()
         fresh = (now - float(_WEBSHARE_CACHE["ts"])) < ttl
-        if not force and fresh and _WEBSHARE_CACHE["targets"]:
+        have_creds = _WEBSHARE_CACHE["username"] and _WEBSHARE_CACHE["password"]
+        have_list = bool(_WEBSHARE_CACHE["targets"])
+        needed_list = mode != "rotating"
+        if not force and fresh and have_creds and (have_list or not needed_list):
             return
 
     import requests
     headers = {"Authorization": f"Token {settings.WEBSHARE_API_KEY}"}
     base = settings.WEBSHARE_API_BASE_URL.rstrip("/")
     timeout = max(1.0, float(settings.WEBSHARE_API_TIMEOUT_SECONDS))
+    username: str | None = None
+    password: str | None = None
+    targets: list[str] = []
 
     try:
-        targets: list[str] = []
-        username: str | None = None
-        password: str | None = None
-        url: str | None = f"{base}/proxy/list/?mode=direct&page_size=100"
-        while url:
-            resp = requests.get(url, headers=headers, timeout=timeout, verify=False)
-            resp.raise_for_status()
-            payload = resp.json()
-            for item in payload.get("results") or []:
-                if not item.get("valid"):
-                    continue
-                host = item.get("proxy_address")
-                port = item.get("port")
-                if host and port:
-                    targets.append(f"{host}:{port}")
-                username = username or item.get("username")
-                password = password or item.get("password")
-            url = payload.get("next")
+        resp = requests.get(f"{base}/proxy/config/", headers=headers, timeout=timeout, verify=False)
+        resp.raise_for_status()
+        cfg = resp.json()
+        username = cfg.get("username") or None
+        password = cfg.get("password") or None
     except Exception as exc:
-        logger.warning("Webshare API refresh failed: %s: %s", type(exc).__name__, exc)
-        return
+        logger.warning("Webshare /proxy/config/ refresh failed: %s: %s", type(exc).__name__, exc)
 
-    if not targets:
-        logger.warning("Webshare API returned no valid proxies; keeping previous cache")
-        return
+    if needed_list:
+        try:
+            url: str | None = f"{base}/proxy/list/?mode=direct&page_size=100"
+            while url:
+                resp = requests.get(url, headers=headers, timeout=timeout, verify=False)
+                resp.raise_for_status()
+                payload = resp.json()
+                for item in payload.get("results") or []:
+                    if not item.get("valid"):
+                        continue
+                    host = item.get("proxy_address")
+                    port = item.get("port")
+                    if host and port:
+                        targets.append(f"{host}:{port}")
+                    username = username or item.get("username")
+                    password = password or item.get("password")
+                url = payload.get("next")
+        except Exception as exc:
+            logger.warning("Webshare /proxy/list/ refresh failed: %s: %s", type(exc).__name__, exc)
 
     with _WEBSHARE_CACHE_LOCK:
-        _WEBSHARE_CACHE["targets"] = targets
-        _WEBSHARE_CACHE["username"] = username
-        _WEBSHARE_CACHE["password"] = password
+        if username and password:
+            _WEBSHARE_CACHE["username"] = username
+            _WEBSHARE_CACHE["password"] = password
+        if targets:
+            _WEBSHARE_CACHE["targets"] = targets
         _WEBSHARE_CACHE["ts"] = time.time()
-    logger.info("Webshare inventory refreshed: %d proxies", len(targets))
+    if needed_list and targets:
+        logger.info("Webshare inventory refreshed: %d proxies", len(targets))
+    elif not needed_list and username:
+        logger.info("Webshare credentials refreshed (rotating mode, no list needed)")
 
 
 def _webshare_credentials() -> tuple[str | None, str | None]:
@@ -1009,6 +1028,14 @@ def fetch_transcript_from_youtube(
             )
             if retryable and attempt < attempts - 1:
                 continue
+            # Persistent VideoUnplayable across rotating residential retries is effectively
+            # permanent — members-only, private, age-restricted, or region-locked everywhere.
+            # Surface as unavailable (skipped) rather than provider_error (counted as failure).
+            if type(exc).__name__ == "VideoUnplayable":
+                raise YouTubeTranscriptFetchError(
+                    code="transcript_unavailable",
+                    detail="Video is not playable (members-only, private, or restricted).",
+                ) from exc
             raise YouTubeTranscriptFetchError(
                 code="provider_error",
                 detail="Failed to fetch transcript from YouTube provider.",
