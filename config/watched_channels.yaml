@@ -40,6 +40,12 @@ channels:
   - handle: "@barissoydan"
     name: "Barış Soydan"
     video_count: 2
+  - handle: "@ncminvest-tr"
+    name: "NCM Investment"
+    video_count: 4
+  - handle: "@IntegralForexTV"
+    name: "Integral Forextv"
+    video_count: 4
 
 
 # Example entries:
