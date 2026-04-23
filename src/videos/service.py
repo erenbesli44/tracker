@@ -51,6 +51,14 @@ _YOUTUBE_REQUEST_SEMAPHORE = threading.BoundedSemaphore(
     max(1, int(settings.YOUTUBE_MAX_CONCURRENT_REQUESTS))
 )
 
+_WEBSHARE_CACHE_LOCK = threading.Lock()
+_WEBSHARE_CACHE: dict[str, Any] = {
+    "ts": 0.0,
+    "username": None,
+    "password": None,
+    "targets": [],
+}
+
 
 class YouTubeTranscriptFetchError(Exception):
     def __init__(self, code: str, detail: str) -> None:
@@ -66,11 +74,78 @@ class YouTubeMetadataFetchError(Exception):
 
 
 def _proxy_enabled() -> bool:
-    return bool(
-        settings.YOUTUBE_PROXY_ENABLED
-        and settings.WEBSHARE_PROXY_USERNAME
-        and settings.WEBSHARE_PROXY_PASSWORD
-    )
+    if not settings.YOUTUBE_PROXY_ENABLED:
+        return False
+    username, password = _webshare_credentials()
+    return bool(username and password)
+
+
+def _refresh_webshare_inventory(force: bool = False) -> None:
+    """Pull live proxy list + credentials from the Webshare API into the cache.
+
+    No-op when WEBSHARE_API_KEY is unset. Cache is TTL-gated unless force=True.
+    Failures are logged and swallowed — the caller falls back to env-var config.
+    """
+    if not settings.WEBSHARE_API_KEY:
+        return
+
+    ttl = max(60, int(settings.WEBSHARE_API_CACHE_TTL_SECONDS))
+    with _WEBSHARE_CACHE_LOCK:
+        now = time.time()
+        fresh = (now - float(_WEBSHARE_CACHE["ts"])) < ttl
+        if not force and fresh and _WEBSHARE_CACHE["targets"]:
+            return
+
+    import requests
+    headers = {"Authorization": f"Token {settings.WEBSHARE_API_KEY}"}
+    base = settings.WEBSHARE_API_BASE_URL.rstrip("/")
+    timeout = max(1.0, float(settings.WEBSHARE_API_TIMEOUT_SECONDS))
+
+    try:
+        targets: list[str] = []
+        username: str | None = None
+        password: str | None = None
+        url: str | None = f"{base}/proxy/list/?mode=direct&page_size=100"
+        while url:
+            resp = requests.get(url, headers=headers, timeout=timeout, verify=False)
+            resp.raise_for_status()
+            payload = resp.json()
+            for item in payload.get("results") or []:
+                if not item.get("valid"):
+                    continue
+                host = item.get("proxy_address")
+                port = item.get("port")
+                if host and port:
+                    targets.append(f"{host}:{port}")
+                username = username or item.get("username")
+                password = password or item.get("password")
+            url = payload.get("next")
+    except Exception as exc:
+        logger.warning("Webshare API refresh failed: %s: %s", type(exc).__name__, exc)
+        return
+
+    if not targets:
+        logger.warning("Webshare API returned no valid proxies; keeping previous cache")
+        return
+
+    with _WEBSHARE_CACHE_LOCK:
+        _WEBSHARE_CACHE["targets"] = targets
+        _WEBSHARE_CACHE["username"] = username
+        _WEBSHARE_CACHE["password"] = password
+        _WEBSHARE_CACHE["ts"] = time.time()
+    logger.info("Webshare inventory refreshed: %d proxies", len(targets))
+
+
+def _webshare_credentials() -> tuple[str | None, str | None]:
+    """Resolve Webshare proxy credentials: API cache > env vars."""
+    if settings.WEBSHARE_API_KEY:
+        _refresh_webshare_inventory()
+        with _WEBSHARE_CACHE_LOCK:
+            user = _WEBSHARE_CACHE["username"]
+            pw = _WEBSHARE_CACHE["password"]
+        if user and pw:
+            return user, pw
+    return settings.WEBSHARE_PROXY_USERNAME, settings.WEBSHARE_PROXY_PASSWORD
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -120,12 +195,19 @@ def _parse_csv(value: str | None) -> list[str]:
 
 
 def _build_proxy_url(host: str, port: int) -> str:
-    username = quote(settings.WEBSHARE_PROXY_USERNAME or "", safe="")
-    password = quote(settings.WEBSHARE_PROXY_PASSWORD or "", safe="")
+    user, pw = _webshare_credentials()
+    username = quote(user or "", safe="")
+    password = quote(pw or "", safe="")
     return f"http://{username}:{password}@{host}:{port}"
 
 
 def _direct_proxy_targets() -> list[str]:
+    if settings.WEBSHARE_API_KEY:
+        _refresh_webshare_inventory()
+        with _WEBSHARE_CACHE_LOCK:
+            cached = list(_WEBSHARE_CACHE["targets"])
+        if cached:
+            return cached
     targets = _parse_csv(settings.WEBSHARE_PROXY_LIST)
     if targets:
         return targets
@@ -229,9 +311,10 @@ def _build_transcript_client(force_rotate: bool = False) -> tuple[YouTubeTranscr
 
     mode = (settings.YOUTUBE_PROXY_MODE or "direct").strip().lower()
     if mode == "rotating":
+        user, pw = _webshare_credentials()
         kwargs: dict[str, Any] = {
-            "proxy_username": settings.WEBSHARE_PROXY_USERNAME,
-            "proxy_password": settings.WEBSHARE_PROXY_PASSWORD,
+            "proxy_username": user,
+            "proxy_password": pw,
         }
         locations = _parse_csv(settings.WEBSHARE_PROXY_FILTER_IP_LOCATIONS)
         if locations:

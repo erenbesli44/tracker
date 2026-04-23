@@ -16,6 +16,7 @@ from src.jobs.youtube_watch.schemas import (
     WatchConfig,
     WatchedChannel,
 )
+from src.videos import service as videos_service
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +24,14 @@ logger = logging.getLogger(__name__)
 def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
     """Execute one full polling cycle across all configured channels."""
     run = repository.create_run(session)
+    proxy_source = "webshare-api" if settings.WEBSHARE_API_KEY else "env-static"
+    proxy_count = len(videos_service._direct_proxy_targets()) if settings.YOUTUBE_PROXY_ENABLED else 0
     logger.info(
-        "YouTube proxy enabled=%s mode=%s",
+        "YouTube proxy enabled=%s mode=%s source=%s proxies=%d",
         settings.YOUTUBE_PROXY_ENABLED,
         settings.YOUTUBE_PROXY_MODE,
+        proxy_source,
+        proxy_count,
     )
     logger.info(
         "YouTube watch run started (id=%d, channels=%d)",

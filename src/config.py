@@ -36,7 +36,21 @@ class Settings(BaseSettings):
     WEBSHARE_PROXY_PORT: int | None = None
     WEBSHARE_PROXY_LIST: str | None = None  # comma-separated host:port entries
     WEBSHARE_PROXY_FILTER_IP_LOCATIONS: str | None = None  # comma-separated country codes
+    WEBSHARE_API_KEY: str | None = None  # when set, fetch live proxy list + creds from Webshare API
+    WEBSHARE_API_BASE_URL: str = "https://proxy.webshare.io/api/v2"
+    WEBSHARE_API_CACHE_TTL_SECONDS: int = 600  # refresh Webshare inventory at most every 10 min
+    WEBSHARE_API_TIMEOUT_SECONDS: float = 10.0
     WATCH_CONFIG_PATH: str = "config/watched_channels.yaml"
+
+    # Twitter / X bot — posts new video summaries as tweets.
+    TWITTER_API_KEY: str | None = None
+    TWITTER_API_SECRET: str | None = None
+    TWITTER_ACCESS_TOKEN: str | None = None
+    TWITTER_ACCESS_TOKEN_SECRET: str | None = None
+    TWITTER_HANDLE: str | None = None  # used to build tweet URLs; falls back to "i"
+    TWITTER_DRY_RUN: bool = False  # when True, log tweet text instead of posting
+    TWITTER_MAX_POSTS_PER_RUN: int = 5
+    TWITTER_FRESHNESS_DAYS: int = 7  # ignore summaries older than this on first run
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
