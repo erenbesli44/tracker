@@ -15,6 +15,13 @@ Transcript may include time markers like [MM:SS-MM:SS]; use them to separate top
 Some videos open with a short teaser/fragman (a preview montage of what will be discussed).
 Ignore that opening fragment — do not classify or summarize it. Analyze only the substantive content.
 
+SENTENCE-COMPLETENESS RULE (applies to EVERY free-text summary field in this
+schema — `summary.short`, `summary.detailed`, and every `topic_segments[*].summary`):
+Each summary MUST end with a fully completed sentence that terminates with proper
+punctuation (. ! ? or …). Never leave the final sentence dangling, mid-clause,
+or mid-word. If you are running out of room, drop an entire sentence rather than
+truncate one. Prefer fewer, complete sentences over more, partial ones.
+
 ══════════════════════════════════════════════════════════════
 CHANNEL CONTEXT
 ══════════════════════════════════════════════════════════════
@@ -132,8 +139,10 @@ JSON SCHEMA
 ══════════════════════════════════════════════════════════════
 FIELD INSTRUCTIONS
 ══════════════════════════════════════════════════════════════
-- summary.short: concise 1-3 sentence overview.
-- summary.detailed: comprehensive paragraph covering main points.
+- summary.short: concise 1-3 sentence overview. Every sentence must be fully
+  completed with terminal punctuation. No dangling final sentence.
+- summary.detailed: comprehensive paragraph covering main points. Must end with
+  a fully completed sentence and terminal punctuation.
 - key_points: up to 5 short bullet-style takeaways (max 15 words each).
 - primary_topic.label: the single dominant focus of the transcript.
 - primary_topic.confidence: how strongly the transcript matches this topic.
@@ -141,7 +150,9 @@ FIELD INSTRUCTIONS
   - subtopic: use one canonical taxonomy slug only.
   - is_expected: true if subtopic is in the channel's expected list, false otherwise.
   - summary: 3-5 sentences capturing speaker's full opinion, reasoning, key
-    price levels, and outlook.
+    price levels, and outlook. Every sentence must be fully completed with
+    terminal punctuation — never cut off mid-sentence. If you cannot finish a
+    sentence, drop it entirely and end with the previous completed one.
   - key_levels: include EVERY price/target/support/resistance/percentage/
     duration mentioned. Short strings. Never empty when the speaker cites
     numbers for this topic.

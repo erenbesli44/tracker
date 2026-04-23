@@ -451,7 +451,7 @@ def _summary_from_llm_payload(
     short_summary = _safe_str(summary_block.get("short"))
     detailed_summary = _safe_str(summary_block.get("detailed"))
     if not short_summary and detailed_summary:
-        short_summary = _clip_text(detailed_summary, _DEFAULT_SUMMARY_CHARS)
+        short_summary = detailed_summary
     if not short_summary:
         return None
 
@@ -649,7 +649,7 @@ def _classification_from_llm_payload(
                     merged.append(text)
                 if len(merged) >= 2:
                     break
-            mention_text = _clip_text(" ".join(merged), 500)
+            mention_text = " ".join(merged).strip()
 
         dominant_stance = "neutral"
         if isinstance(stances, list) and stances:
