@@ -340,7 +340,7 @@ def _call_gemini_json(prompt: str) -> dict[str, Any]:
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
-            "maxOutputTokens": 20480,
+            "maxOutputTokens": 8192,
         },
     }
     body = json.dumps(request_payload).encode("utf-8")
