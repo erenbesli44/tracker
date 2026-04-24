@@ -46,6 +46,9 @@ channels:
   - handle: "@IntegralForexTV"
     name: "Integral Forextv"
     video_count: 4
+  - handle: "@ErkanÖz-i5m"
+    name: "Erkan Öz"
+    video_count: 4
 
 
 # Example entries:
