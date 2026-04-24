@@ -172,6 +172,12 @@ def _run_postgres_migrations(session: Session) -> None:
     session.exec(
         text("ALTER TABLE transcript ADD COLUMN IF NOT EXISTS segments_json VARCHAR")
     )
+    session.exec(
+        text("ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_length INTEGER NOT NULL DEFAULT 1")
+    )
+    session.exec(
+        text("ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_tweet_ids VARCHAR")
+    )
     _merge_dis_siyaset_into_jeopolitik(session)
     _apply_broadened_taxonomy_migration(session)
     session.commit()
@@ -462,6 +468,12 @@ def run_lightweight_migrations() -> None:
 
         if not _sqlite_has_column(session, "transcript", "segments_json"):
             session.exec(text("ALTER TABLE transcript ADD COLUMN segments_json VARCHAR"))
+
+        if not _sqlite_has_column(session, "twitter_post", "thread_length"):
+            session.exec(text("ALTER TABLE twitter_post ADD COLUMN thread_length INTEGER NOT NULL DEFAULT 1"))
+
+        if not _sqlite_has_column(session, "twitter_post", "thread_tweet_ids"):
+            session.exec(text("ALTER TABLE twitter_post ADD COLUMN thread_tweet_ids VARCHAR"))
 
         # Finalize migration: make legacy person references optional.
         video_person_not_null = _sqlite_is_not_null_column(session, "video", "person_id")

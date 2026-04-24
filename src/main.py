@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
     import src.topics.models  # noqa: F401
     import src.classification.models  # noqa: F401
     import src.jobs.youtube_watch.models  # noqa: F401
+    import src.jobs.twitter_post.models  # noqa: F401
 
     create_db_and_tables()
     run_lightweight_migrations()
@@ -59,6 +60,7 @@ from src.classification.router import router as classification_router  # noqa: E
 from src.timeline.router import router as timeline_router  # noqa: E402
 from src.ingestion.router import router as ingestion_router  # noqa: E402
 from src.jobs.youtube_watch.router import router as youtube_watch_router  # noqa: E402
+from src.jobs.twitter_post.router import router as twitter_post_router  # noqa: E402
 
 app.include_router(persons_router)
 app.include_router(topics_router)
@@ -68,6 +70,7 @@ app.include_router(classification_router)
 app.include_router(timeline_router)
 app.include_router(ingestion_router)
 app.include_router(youtube_watch_router)
+app.include_router(twitter_post_router)
 
 
 @app.get("/health", tags=["health"])
