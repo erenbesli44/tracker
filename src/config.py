@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./tracker.db"  # override via env for PostgreSQL
     ENVIRONMENT: str = "local"
     APP_VERSION: str = "0.1.0"
+    API_KEY: str | None = None  # required X-API-Key header value for all endpoints except /health
     GEMINI_API_KEY: str | None = None
     # API model id for "Gemini 3.1 Flash Lite".
     GEMINI_MODEL: str = "gemini-3.1-flash-lite-preview"

@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from src.config import settings
 
@@ -52,6 +52,7 @@ if settings.ENVIRONMENT not in ("local", "development"):
 app = FastAPI(**app_configs)
 
 # ── Routers ────────────────────────────────────────────────────────────────
+from src.auth import require_api_key  # noqa: E402
 from src.persons.router import router as persons_router  # noqa: E402
 from src.topics.router import router as topics_router  # noqa: E402
 from src.channels.router import router as channels_router  # noqa: E402
@@ -62,15 +63,17 @@ from src.ingestion.router import router as ingestion_router  # noqa: E402
 from src.jobs.youtube_watch.router import router as youtube_watch_router  # noqa: E402
 from src.jobs.twitter_post.router import router as twitter_post_router  # noqa: E402
 
-app.include_router(persons_router)
-app.include_router(topics_router)
-app.include_router(channels_router)
-app.include_router(videos_router)
-app.include_router(classification_router)
-app.include_router(timeline_router)
-app.include_router(ingestion_router)
-app.include_router(youtube_watch_router)
-app.include_router(twitter_post_router)
+_protected = [Depends(require_api_key)]
+
+app.include_router(persons_router, dependencies=_protected)
+app.include_router(topics_router, dependencies=_protected)
+app.include_router(channels_router, dependencies=_protected)
+app.include_router(videos_router, dependencies=_protected)
+app.include_router(classification_router, dependencies=_protected)
+app.include_router(timeline_router, dependencies=_protected)
+app.include_router(ingestion_router, dependencies=_protected)
+app.include_router(youtube_watch_router, dependencies=_protected)
+app.include_router(twitter_post_router, dependencies=_protected)
 
 
 @app.get("/health", tags=["health"])
