@@ -1,0 +1,8 @@
+defaults:
+  video_count: 1
+  transcript_languages: ["tr", "en"]
+
+channels:
+  - handle: "@MeseleEkonomi"
+    name: "Mesele Ekonomi"
+    video_count: 1
