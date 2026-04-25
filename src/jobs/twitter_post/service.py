@@ -89,9 +89,10 @@ def run_once(
 
         tweets = build_thread(
             title=video.title or "—",
-            video_url=video.video_url,
             channel_name=channel.name if channel else None,
             highlights_json=video_summary.highlights,
+            short_summary=video_summary.short_summary,
+            published_at=video.published_at,
             topic_mentions=topic_dicts,
         )
 
