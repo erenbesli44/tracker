@@ -31,8 +31,7 @@ def build_post(
 
     bullets = [h.strip() for h in highlights if h.strip()]
     if bullets:
-        bullet_block = "\n".join(f"• {b}" for b in bullets)
-        parts.append(f"Öne Çıkanlar\n\n{bullet_block}")
+        parts.append("\n".join(f"• {b}" for b in bullets))
 
     summary = (short_summary or "").strip()
     if summary:
@@ -44,7 +43,7 @@ def build_post(
     if published_at:
         footer_parts.append(published_at.strftime("%d.%m.%Y"))
     if footer_parts:
-        parts.append(" · ".join(footer_parts))
+        parts.append(" ".join(footer_parts))
 
     return "\n\n".join(parts)
 
