@@ -27,15 +27,11 @@ def run_once(
     summary = TweetRunSummary()
     errors: list[str] = []
 
-    candidates = repository.find_unposted_summaries(
-        session,
-        limit=settings.TWITTER_MAX_POSTS_PER_RUN,
-        freshness_days=settings.TWITTER_FRESHNESS_DAYS,
-    )
+    candidates = repository.find_unposted_summaries(session, last_n=10)
     summary.candidates_found = len(candidates)
     logger.info(
-        "Twitter post run %d: %d candidate(s) within %d-day window",
-        run.id, summary.candidates_found, settings.TWITTER_FRESHNESS_DAYS,
+        "Twitter post run %d: %d candidate(s) from last 10 videos",
+        run.id, summary.candidates_found,
     )
 
     if summary.candidates_found == 0:
@@ -44,6 +40,7 @@ def run_once(
             status="success", candidates_found=0,
             posted=0, skipped=0, failed=0, error_details=None,
         )
+        logger.info("Run %d: nothing to post", run.id)
         return summary
 
     try:

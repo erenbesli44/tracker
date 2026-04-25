@@ -1,6 +1,6 @@
 """Persistence helpers for the Twitter posting job."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlmodel import Session, select
 
@@ -47,19 +47,17 @@ def finalize_run(
 def find_unposted_summaries(
     session: Session,
     *,
-    limit: int,
-    freshness_days: int,
+    last_n: int = 10,
 ) -> list[tuple[Video, VideoSummary]]:
-    """Return (Video, VideoSummary) pairs that have never been tweeted."""
-    cutoff = utc_now() - timedelta(days=freshness_days)
+    """Return unposted (Video, VideoSummary) pairs from the last N videos by publish date."""
     posted_ids = set(session.exec(select(TwitterPost.video_id)).all())
-    rows = session.exec(
+    recent = session.exec(
         select(Video, VideoSummary)
         .join(VideoSummary, VideoSummary.video_id == Video.id)
-        .where(VideoSummary.created_at >= cutoff)
-        .order_by(VideoSummary.created_at.asc())
+        .order_by(Video.published_at.desc())
+        .limit(last_n)
     ).all()
-    return [(v, s) for v, s in rows if v.id not in posted_ids][:limit]
+    return [(v, s) for v, s in recent if v.id not in posted_ids]
 
 
 def get_channel(session: Session, channel_id: int | None) -> YouTubeChannel | None:
