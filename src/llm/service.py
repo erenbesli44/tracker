@@ -515,6 +515,9 @@ def generate_economic_thesis_json(
     return _call_llm_json(prompt)
 
 
+_CONTENT_MAX_ATTEMPTS = 2
+
+
 def generate_analysis_json(
     *,
     source_platform: str,
@@ -527,7 +530,12 @@ def generate_analysis_json(
     output_language: str | None = None,
     channel_primary_topic: str = "",
 ) -> dict[str, Any]:
-    """Single merged call that returns both summary and classification."""
+    """Single merged call that returns both summary and classification.
+
+    Retries once if the payload comes back without key_points, since an empty
+    highlights list written to the DB would make needs_summary=False on all
+    future pipeline runs, permanently skipping the video.
+    """
     prompt = _build_prompt(
         ANALYSIS_PROMPT_TEMPLATE,
         source_platform=source_platform,
@@ -540,4 +548,16 @@ def generate_analysis_json(
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
         channel_primary_topic=channel_primary_topic,
     )
-    return _call_llm_json(prompt)
+    payload: dict[str, Any] = {}
+    for attempt in range(1, _CONTENT_MAX_ATTEMPTS + 1):
+        payload = _call_llm_json(prompt)
+        key_points = payload.get("key_points")
+        if isinstance(key_points, list) and key_points:
+            return payload
+        if attempt < _CONTENT_MAX_ATTEMPTS:
+            logger.warning(
+                "LLM returned empty/missing key_points (attempt %d/%d), retrying",
+                attempt,
+                _CONTENT_MAX_ATTEMPTS,
+            )
+    return payload

@@ -439,6 +439,45 @@ def _build_llm_metadata(
     }
 
 
+_BULLET_DICT_FALLBACK_KEYS = ("text", "summary", "bullet", "content", "value")
+
+
+def _extract_bullets(raw: object, primary_key: str, limit: int = 5) -> list[str]:
+    """Extract up to `limit` bullet strings from an LLM list field.
+
+    Accepts every shape we've seen providers emit: list of plain strings,
+    list of `{primary_key: "..."}` dicts, or a mix. Falls back to common
+    alternate keys so future shape drift doesn't silently drop bullets.
+    Warns if the field was non-empty but nothing was extracted — that's
+    the exact failure mode that let highlights disappear unnoticed.
+    """
+    if not isinstance(raw, list):
+        return []
+    bullets: list[str] = []
+    for item in raw[:limit]:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = _safe_str(item.get(primary_key))
+            if not text:
+                for alt in _BULLET_DICT_FALLBACK_KEYS:
+                    text = _safe_str(item.get(alt))
+                    if text:
+                        break
+        else:
+            text = ""
+        if text:
+            bullets.append(text)
+    if raw and not bullets:
+        logger.warning(
+            "LLM bullet field had %d entries but yielded 0 bullets (key=%s, sample=%r)",
+            len(raw),
+            primary_key,
+            raw[0] if raw else None,
+        )
+    return bullets
+
+
 def _summary_from_llm_payload(
     payload: dict,
     *,
@@ -455,22 +494,9 @@ def _summary_from_llm_payload(
     if not short_summary:
         return None
 
-    highlights: list[str] = []
-    key_points = payload.get("key_points")
-    if isinstance(key_points, list):
-        for item in key_points[:5]:
-            if isinstance(item, dict):
-                point = _safe_str(item.get("point"))
-                if point:
-                    highlights.append(point)
+    highlights = _extract_bullets(payload.get("key_points"), "point")
     if not highlights:
-        takeaways = payload.get("actionable_takeaways")
-        if isinstance(takeaways, list):
-            for item in takeaways[:5]:
-                if isinstance(item, dict):
-                    takeaway = _safe_str(item.get("takeaway"))
-                    if takeaway:
-                        highlights.append(takeaway)
+        highlights = _extract_bullets(payload.get("actionable_takeaways"), "takeaway")
 
     language = _safe_str(payload.get("language"), transcript_language) or transcript_language
     return IngestionSummaryInput(

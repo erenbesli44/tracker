@@ -114,9 +114,7 @@ JSON SCHEMA
     "short": "1-3 sentence summary",
     "detailed": "detailed paragraph summary"
   },
-  "key_points": [
-    {"point": "key takeaway or insight"}
-  ],
+  "key_points": ["key takeaway or insight (plain string, max 15 words)"],
   "primary_topic": {
     "label": "one main topic from taxonomy",
     "confidence": 0.0
@@ -143,7 +141,8 @@ FIELD INSTRUCTIONS
   completed with terminal punctuation. No dangling final sentence.
 - summary.detailed: comprehensive paragraph covering main points. Must end with
   a fully completed sentence and terminal punctuation.
-- key_points: up to 5 short bullet-style takeaways (max 15 words each).
+- key_points: list of up to 5 plain strings (not objects), each a short
+  bullet-style takeaway, max 15 words.
 - primary_topic.label: the single dominant focus of the transcript.
 - primary_topic.confidence: how strongly the transcript matches this topic.
 - topic_segments: one entry per distinct subtopic discussed.
@@ -186,7 +185,7 @@ JSON schema:
 {
   "language": "string",
   "summary": {"short": "1-3 sentence summary", "detailed": "detailed paragraph"},
-  "key_points": [{"point": "string"}]
+  "key_points": ["string"]
 }
 
 INPUT METADATA:
