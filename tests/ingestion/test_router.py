@@ -421,7 +421,7 @@ async def test_ingest_youtube_channel_second_run_skips_already_extracted(
     assert transcript_fetch_calls["count"] == 2
 
 
-async def test_ingest_youtube_channel_remembers_unavailable_transcript_until_retry(
+async def test_ingest_youtube_channel_retries_unavailable_transcript_on_every_run(
     client: AsyncClient, session, monkeypatch
 ):
     from src.ingestion import service as ingestion_service
@@ -483,8 +483,8 @@ async def test_ingest_youtube_channel_remembers_unavailable_transcript_until_ret
     assert second_run.status_code == 200
     payload = second_run.json()
     assert payload["videos_ingested"] == 0
-    assert payload["results"][0]["status"] == "skipped_transcript_retry_pending"
-    assert fetch_calls["count"] == 1
+    assert payload["results"][0]["status"] == "skipped_transcript_unavailable"
+    assert fetch_calls["count"] == 2
 
 
 async def test_ingest_youtube_channel_retries_pending_video_when_due(
@@ -553,11 +553,6 @@ async def test_ingest_youtube_channel_retries_pending_video_when_due(
     )
     assert first_run.status_code == 200
     assert first_run.json()["videos_skipped_no_transcript"] == 1
-
-    stored = session.exec(select(Video).where(Video.video_id == "GGGGGGGGGGG")).one()
-    stored.transcript_next_retry_at = datetime(2000, 1, 1)
-    session.add(stored)
-    session.commit()
 
     second_run = await client.post(
         "/ingestions/youtube/channel",

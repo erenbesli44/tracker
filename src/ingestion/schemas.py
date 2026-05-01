@@ -101,7 +101,6 @@ class IngestionYoutubeChannelRunVideoResult(CustomModel):
     status: Literal[
         "ingested",
         "skipped_existing",
-        "skipped_transcript_retry_pending",
         "skipped_transcript_unavailable",
         "failed",
     ]

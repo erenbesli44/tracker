@@ -1528,49 +1528,25 @@ def ingest_youtube_channel(
         if existing_video is None:
             existing_video = videos_service.get_by_url(session, candidate.video_url)
 
-        if existing_video is not None:
-            if videos_service.get_transcript(session, existing_video.id):
-                videos_skipped_existing += 1
-                results.append(
-                    IngestionYoutubeChannelRunVideoResult(
-                        youtube_video_id=candidate.video_id,
-                        video_url=candidate.video_url,
-                        status="skipped_existing",
-                        video_id=existing_video.id,
-                        detail="Video is already extracted in database.",
-                    )
+        if existing_video is not None and videos_service.get_transcript(session, existing_video.id):
+            videos_skipped_existing += 1
+            results.append(
+                IngestionYoutubeChannelRunVideoResult(
+                    youtube_video_id=candidate.video_id,
+                    video_url=candidate.video_url,
+                    status="skipped_existing",
+                    video_id=existing_video.id,
+                    detail="Video is already extracted in database.",
                 )
-                continue
-            if not videos_service.transcript_retry_due(existing_video):
-                videos_skipped_no_transcript += 1
-                retry_at = (
-                    existing_video.transcript_next_retry_at.isoformat()
-                    if existing_video.transcript_next_retry_at
-                    else "later"
-                )
-                results.append(
-                    IngestionYoutubeChannelRunVideoResult(
-                        youtube_video_id=candidate.video_id,
-                        video_url=candidate.video_url,
-                        status="skipped_transcript_retry_pending",
-                        video_id=existing_video.id,
-                        detail=f"Transcript retry is scheduled for {retry_at}.",
-                    )
-                )
-                continue
-            video = _ensure_video_for_transcript_attempt(
-                session,
-                channel_id=channel.id,
-                candidate=candidate,
-                video_metadata=video_metadata,
             )
-        else:
-            video = _ensure_video_for_transcript_attempt(
-                session,
-                channel_id=channel.id,
-                candidate=candidate,
-                video_metadata=video_metadata,
-            )
+            continue
+
+        video = _ensure_video_for_transcript_attempt(
+            session,
+            channel_id=channel.id,
+            candidate=candidate,
+            video_metadata=video_metadata,
+        )
 
         try:
             fetched_transcript = videos_service.fetch_transcript_from_youtube(
