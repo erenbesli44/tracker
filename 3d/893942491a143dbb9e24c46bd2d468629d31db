@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "3d893942491a143dbb9e24c46bd2d468629d31db",
+  "prompts": {
+    "61a1e12adf74e614": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a006905-2242-4f65-957d-bc398cd22d89",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}
