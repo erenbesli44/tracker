@@ -44,7 +44,7 @@ def build_post(
 
     bullets = [h.strip() for h in highlights if h.strip()]
     if bullets:
-        parts.append("\n".join(f"• {b}" for b in bullets))
+        parts.append("\n\n".join(f"• {b}" for b in bullets))
 
     summary = (short_summary or "").strip()
     if summary:
