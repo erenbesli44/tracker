@@ -55,9 +55,6 @@ channels:
   - handle: "@EmreŞİRİNileBorsaveFinans"
     name: "Emre Şirin"
     video_count: 4
-  - handle: "@EkonomiEkranı"
-    name: "EkonomiEkranı"
-    video_count: 4
   - handle: "@boraozkentlenasdaq"
     name: "Bora Özkent"
     video_count: 4

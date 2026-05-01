@@ -1,10 +1,20 @@
-"""Build a single X/Twitter post per video: title → Öne Çıkanlar → Kısa Özet → channel → date.
+"""Build a single X/Twitter post per video: channel (bold) → title → highlights → Kısa Özet → date.
 
 X Premium allows posts up to 25,000 chars — no truncation needed.
 """
 
 import json
 from datetime import datetime
+
+_BOLD_MAP = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    "𝗔𝗕𝗖𝗗𝗘𝗙𝗚𝗛𝗜𝗝𝗞𝗟𝗠𝗡𝗢𝗣𝗤𝗥𝗦𝗧𝗨𝗩𝗪𝗫𝗬𝗭𝗮𝗯𝗰𝗱𝗲𝗳𝗴𝗵𝗶𝗷𝗸𝗹𝗺𝗻𝗼𝗽𝗾𝗿𝘀𝘁𝘂𝘃𝘄𝘅𝘆𝘇𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵",
+)
+
+
+def _bold(text: str) -> str:
+    """Convert ASCII alphanumeric chars to Unicode bold sans-serif; leave others unchanged."""
+    return text.translate(_BOLD_MAP)
 
 
 def build_post(
@@ -27,6 +37,9 @@ def build_post(
 
     parts: list[str] = []
 
+    if channel_name and channel_name.strip():
+        parts.append(_bold(channel_name.strip()))
+
     parts.append((title or "—").strip())
 
     bullets = [h.strip() for h in highlights if h.strip()]
@@ -37,13 +50,8 @@ def build_post(
     if summary:
         parts.append(f"Kısa Özet\n\n{summary}")
 
-    footer_parts: list[str] = []
-    if channel_name and channel_name.strip():
-        footer_parts.append(channel_name.strip())
     if published_at:
-        footer_parts.append(published_at.strftime("%d.%m.%Y"))
-    if footer_parts:
-        parts.append(" ".join(footer_parts))
+        parts.append(published_at.strftime("%d.%m.%Y"))
 
     return "\n\n".join(parts)
 
