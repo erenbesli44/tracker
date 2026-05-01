@@ -534,6 +534,8 @@ def run_lightweight_migrations() -> None:
     """Best-effort schema upgrades without Alembic."""
     if engine.dialect.name == "postgresql":
         with Session(engine) as session:
+            # Serialize concurrent migration runs; auto-released at transaction end.
+            session.exec(text("SELECT pg_advisory_xact_lock(20260501)"))
             _run_postgres_migrations(session)
         return
 
