@@ -1538,18 +1538,65 @@ def ingest_youtube_channel(
         if existing_video is None:
             existing_video = videos_service.get_by_url(session, candidate.video_url)
 
-        if existing_video is not None and videos_service.get_transcript(session, existing_video.id):
-            videos_skipped_existing += 1
-            results.append(
-                IngestionYoutubeChannelRunVideoResult(
-                    youtube_video_id=candidate.video_id,
-                    video_url=candidate.video_url,
-                    status="skipped_existing",
-                    video_id=existing_video.id,
-                    detail="Video is already extracted in database.",
+        if existing_video is not None:
+            existing_transcript = videos_service.get_transcript(session, existing_video.id)
+            if existing_transcript:
+                # Backfill missing analytics for videos that were ingested before LLM
+                # was configured or when LLM failed during the original ingestion run.
+                needs_summary = videos_service.get_summary(session, existing_video.id) is None
+                needs_classification = (
+                    session.exec(
+                        select(TopicMention).where(TopicMention.video_id == existing_video.id)
+                    ).first()
+                    is None
                 )
-            )
-            continue
+                if needs_summary or needs_classification:
+                    backfill_payload = IngestionYoutubeRequest(
+                        person=person_hint,
+                        video={
+                            "video_url": candidate.video_url,
+                            "title": candidate.title,
+                            "published_at": candidate.published_at,
+                        },
+                        transcript={
+                            "raw_text": existing_transcript.raw_text,
+                            "language": existing_transcript.language,
+                            "segments": videos_service.parse_transcript_segments(
+                                existing_transcript.segments_json
+                            ),
+                        },
+                        overwrite={"transcript": False, "summary": True, "classification": True},
+                    )
+                    try:
+                        _ingest_youtube_pipeline(
+                            session,
+                            backfill_payload,
+                            video_metadata_override=video_metadata,
+                        )
+                        logger.info(
+                            "Analytics backfilled for video_id=%s url=%s",
+                            existing_video.id,
+                            candidate.video_url,
+                        )
+                    except Exception as exc:
+                        session.rollback()
+                        logger.warning(
+                            "Analytics backfill failed for video_id=%s: %s",
+                            existing_video.id,
+                            exc,
+                            exc_info=True,
+                        )
+                videos_skipped_existing += 1
+                results.append(
+                    IngestionYoutubeChannelRunVideoResult(
+                        youtube_video_id=candidate.video_id,
+                        video_url=candidate.video_url,
+                        status="skipped_existing",
+                        video_id=existing_video.id,
+                        detail="Video is already extracted in database.",
+                    )
+                )
+                continue
 
         video = _ensure_video_for_transcript_attempt(
             session,
