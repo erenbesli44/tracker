@@ -1,0 +1,48 @@
+src/jobs/youtube_watch/runner.py
+  3a091dd6094cbc34 25-28,31
+src/ingestion/service.py
+  3a091dd6094cbc34 3,20,33,36,39-40,152-185,767-770,837,843,851-852,859-889,898-900,920-922,956,1007-1015,1092-1094,1265-1278,1300-1302,1342-1382,1413-1427,1431-1432,1434-1444,1509,1512,1517,1526,1532-1558,1560-1572,1593-1598,1607,1629-1633
+src/database.py
+  3a091dd6094cbc34 60-65,78-82,86-90,147-155,158-169,203,205-208,211-229,232-258,486-488,547-571,579-581,603,605,608-623
+src/jobs/twitter_post/runner.py
+  3a091dd6094cbc34 25-29,32
+config/watched_channels.yaml
+  2251c58c701d6d6f 52-57
+src/videos/service.py
+  3a091dd6094cbc34 8,35-36,38-42,113,199-264,357-362,364,390,392,396,417-419,574-578,683-685,801-807,836,862-868,870-872,1005,1023-1025,1118-1120
+tests/conftest.py
+  3a091dd6094cbc34 1-2,8-13,28-30,52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "b898b63af851098e356788cdf4445ad4e007e6fb",
+  "prompts": {
+    "2251c58c701d6d6f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de335-7153-78f1-afe9-145f539c8370",
+        "model": "unknown"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 0,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    },
+    "3a091dd6094cbc34": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019de333-db68-7183-a939-20322dfff073",
+        "model": "gpt-5.5"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 523,
+      "total_deletions": 105,
+      "accepted_lines": 521,
+      "overriden_lines": 0
+    }
+  }
+}
