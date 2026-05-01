@@ -28,9 +28,6 @@ channels:
   - handle: "@selçukgeçer"
     name: "Selçuk Geçer"
     video_count: 4
-  - handle: "@EkonomideSaadet"
-    name: "Saadet Büyük"
-    video_count: 4
   - handle: "@KanalFinans"
     name: "Tunç Şatıroğlu"
     video_count: 4
