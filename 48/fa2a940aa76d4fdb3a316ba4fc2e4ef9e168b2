@@ -1,0 +1,23 @@
+src/jobs/twitter_post/formatter.py
+  13e2e11c727d61a5 47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "48fa2a940aa76d4fdb3a316ba4fc2e4ef9e168b2",
+  "prompts": {
+    "13e2e11c727d61a5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f1eff3d7-935c-424c-8536-88e1b64624af",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
