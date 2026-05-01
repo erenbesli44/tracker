@@ -1357,8 +1357,12 @@ def _ensure_channel_from_playlist(
             channel_handle=playlist_info.channel_handle,
             profile=playlist_info.profile,
         )
-        session.commit()
-        session.refresh(channel)
+    # Always commit so that youtube_channel_id updates from _resolve_channel are
+    # persisted. Without this, channels found by handle that get youtube_channel_id
+    # flushed (not committed) would lose that update if the per-video loop skips all
+    # candidates — causing an unnecessary yt-dlp re-fetch on every subsequent run.
+    session.commit()
+    session.refresh(channel)
     return channel, action
 
 
@@ -1510,6 +1514,12 @@ def ingest_youtube_channel(
     playlist_info = _list_recent_channel_videos(channel_id, data.video_count)
     candidates = playlist_info.candidates
     channel, _channel_action = _ensure_channel_from_playlist(session, channel_id, playlist_info)
+
+    if not playlist_info.candidates:
+        logger.warning(
+            "No video candidates returned for channel_id=%s (yt-dlp may be blocked or channel has no public videos)",
+            channel_id,
+        )
 
     # Build a person hint from what we already know about the channel so that
     # _resolve_channel can identify the owner even when per-video metadata fetch
