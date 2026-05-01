@@ -49,6 +49,12 @@ channels:
   - handle: "@ErkanÖz-i5m"
     name: "Erkan Öz"
     video_count: 4
+  - handle: "@cevikfinance"
+    name: "Cevik Finance"
+    video_count: 4
+  - handle: "@yatirim101"
+    name: "Yatırım 101"
+    video_count: 4
 
 
 # Example entries:

@@ -19,16 +19,16 @@ logger = logging.getLogger(__name__)
 
 def _bootstrap() -> None:
     """Import all SQLModel tables so metadata is registered, then sync schema."""
-    import src.persons.models  # noqa: F401
     import src.channels.models  # noqa: F401
-    import src.videos.models  # noqa: F401
-    import src.topics.models  # noqa: F401
     import src.classification.models  # noqa: F401
     import src.jobs.youtube_watch.models  # noqa: F401
-
-    from src.database import create_db_and_tables
+    import src.persons.models  # noqa: F401
+    import src.topics.models  # noqa: F401
+    import src.videos.models  # noqa: F401
+    from src.database import create_db_and_tables, run_lightweight_migrations
 
     create_db_and_tables()
+    run_lightweight_migrations()
 
 
 def main() -> int:

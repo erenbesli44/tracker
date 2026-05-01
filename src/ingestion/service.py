@@ -1,6 +1,6 @@
 import logging
-import re
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from statistics import mean
@@ -8,18 +8,16 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, status
-
-logger = logging.getLogger(__name__)
 from slugify import slugify
 from sqlmodel import Session, select
 
 from src.channels import service as channels_service
 from src.channels.schemas import ChannelCreate
-from src.channels.service import decode_subtopics
 from src.classification import service as classification_service
 from src.classification.constants import TOPIC_KEYWORDS
 from src.classification.models import TopicMention
 from src.classification.schemas import ClassificationRequest, TopicMentionCreate
+from src.config import settings
 from src.ingestion.schemas import (
     IngestionActionResponse,
     IngestionClassificationInput,
@@ -31,12 +29,14 @@ from src.ingestion.schemas import (
     IngestionYoutubeRequest,
     IngestionYoutubeResponse,
 )
-from src.config import settings
 from src.llm import service as llm_service
+from src.persons import service as persons_service
 from src.topics import service as topics_service
 from src.videos import service as videos_service
-from src.videos.exceptions import InvalidYouTubeUrl, TranscriptAlreadyExists
+from src.videos.exceptions import InvalidYouTubeUrl
 from src.videos.schemas import TranscriptCreate, VideoCreate, VideoSummaryCreate
+
+logger = logging.getLogger(__name__)
 
 _CHANNEL_ID_PATTERN = re.compile(r"UC[A-Za-z0-9_-]{22}")
 _CHANNEL_ID_FROM_TEXT_PATTERN = re.compile(r"(UC[A-Za-z0-9_-]{22})")
@@ -147,6 +147,40 @@ class _ChannelPlaylistInfo:
     channel_name: str | None
     channel_handle: str | None
     profile: dict[str, Any] | None = None
+
+
+def _playlist_author_url(channel_id: str, playlist_info: _ChannelPlaylistInfo) -> str:
+    if playlist_info.channel_handle:
+        return f"https://www.youtube.com/{playlist_info.channel_handle}"
+    return f"https://www.youtube.com/channel/{channel_id}"
+
+
+def _playlist_person_hint(playlist_info: _ChannelPlaylistInfo) -> dict | None:
+    if not playlist_info.channel_name and not playlist_info.channel_handle:
+        return None
+    return {
+        "name": playlist_info.channel_name or playlist_info.channel_handle.lstrip("@"),
+        "platform_handle": playlist_info.channel_handle,
+    }
+
+
+def _playlist_video_metadata(
+    channel_id: str,
+    playlist_info: _ChannelPlaylistInfo,
+    candidate: _ChannelVideoCandidate | None = None,
+) -> dict[str, Any]:
+    channel_name = playlist_info.channel_name or (
+        playlist_info.channel_handle.lstrip("@") if playlist_info.channel_handle else channel_id
+    )
+    metadata: dict[str, Any] = {
+        "author_name": channel_name,
+        "author_url": _playlist_author_url(channel_id, playlist_info),
+        "channel_id": channel_id,
+    }
+    if candidate is not None:
+        metadata["title"] = candidate.title
+        metadata["publish_date"] = candidate.published_at
+    return metadata
 
 
 def _compact_whitespace(text: str) -> str:
@@ -730,9 +764,10 @@ def _auto_fill_missing_analytics_for_new_video(
     # This runs for new and reused videos alike, so re-ingesting a video with missing analytics
     # will always fill them in without duplicating existing data.
     needs_summary = data.summary is None and videos_service.get_summary(session, video.id) is None
-    has_classification = session.exec(
-        select(TopicMention).where(TopicMention.video_id == video.id)
-    ).first() is not None
+    has_classification = (
+        session.exec(select(TopicMention).where(TopicMention.video_id == video.id)).first()
+        is not None
+    )
     needs_classification = data.classification is None and not has_classification
     if not needs_summary and not needs_classification:
         return
@@ -799,11 +834,13 @@ def _resolve_channel(
     channel_handle: str | None = None
     channel_url: str | None = None
     channel_bio = data.person.bio if data.person else None
+    youtube_channel_id: str | None = None
 
     if video_metadata:
         metadata_name = str(video_metadata.get("author_name", "")).strip()
         metadata_author_url = str(video_metadata.get("author_url", "")).strip()
         metadata_handle = videos_service.extract_youtube_channel_handle(metadata_author_url)
+        metadata_channel_id = str(video_metadata.get("channel_id", "")).strip()
 
         if metadata_name:
             channel_name = metadata_name
@@ -811,12 +848,45 @@ def _resolve_channel(
             channel_handle = metadata_handle
         if metadata_author_url:
             channel_url = metadata_author_url
+        if _CHANNEL_ID_PATTERN.fullmatch(metadata_channel_id):
+            youtube_channel_id = metadata_channel_id
 
     if data.person:
         if not channel_name and data.person.name:
             channel_name = data.person.name.strip()
         if not channel_handle and data.person.platform_handle:
             channel_handle = data.person.platform_handle.strip()
+        if data.person.id:
+            person = persons_service.get_by_id(session, data.person.id)
+            if person:
+                if not channel_name:
+                    channel_name = person.name.strip()
+                if not channel_handle and person.platform_handle:
+                    channel_handle = person.platform_handle.strip()
+                if not channel_bio and person.bio:
+                    channel_bio = person.bio
+
+    if youtube_channel_id:
+        by_youtube_id = channels_service.get_by_youtube_channel_id(session, youtube_channel_id)
+        if by_youtube_id:
+            updated = False
+            if by_youtube_id.legacy_person_id is not None:
+                by_youtube_id.legacy_person_id = None
+                updated = True
+            if channel_handle and not by_youtube_id.channel_handle:
+                by_youtube_id.channel_handle = channel_handle
+                updated = True
+            if channel_url and not by_youtube_id.channel_url:
+                by_youtube_id.channel_url = channel_url
+                updated = True
+            if channel_bio and not by_youtube_id.bio:
+                by_youtube_id.bio = channel_bio
+                updated = True
+            if updated:
+                session.add(by_youtube_id)
+                session.flush()
+                session.refresh(by_youtube_id)
+            return by_youtube_id, "reused"
 
     if channel_handle:
         by_handle = channels_service.get_by_channel_handle(session, channel_handle)
@@ -824,6 +894,9 @@ def _resolve_channel(
             updated = False
             if by_handle.legacy_person_id is not None:
                 by_handle.legacy_person_id = None
+                updated = True
+            if youtube_channel_id and not by_handle.youtube_channel_id:
+                by_handle.youtube_channel_id = youtube_channel_id
                 updated = True
             if channel_url and not by_handle.channel_url:
                 by_handle.channel_url = channel_url
@@ -843,6 +916,9 @@ def _resolve_channel(
             updated = False
             if by_slug.legacy_person_id is not None:
                 by_slug.legacy_person_id = None
+                updated = True
+            if youtube_channel_id and not by_slug.youtube_channel_id:
+                by_slug.youtube_channel_id = youtube_channel_id
                 updated = True
             if channel_handle and not by_slug.channel_handle:
                 by_slug.channel_handle = channel_handle
@@ -877,6 +953,7 @@ def _resolve_channel(
             name=channel_name,
             platform="youtube",
             channel_handle=channel_handle,
+            youtube_channel_id=youtube_channel_id,
             channel_url=channel_url,
             bio=channel_bio,
             legacy_person_id=None,
@@ -926,6 +1003,15 @@ def _resolve_video(
 
         if existing.published_at is None:
             existing.published_at = _resolve_published_at(data, video_metadata)
+
+        if existing.duration is None:
+            duration = data.video.duration
+            if duration is None and video_metadata:
+                raw_duration = video_metadata.get("duration")
+                if isinstance(raw_duration, (int, float)):
+                    duration = int(raw_duration)
+            if duration is not None:
+                existing.duration = duration
 
         session.add(existing)
         session.flush()
@@ -1003,7 +1089,9 @@ def _resolve_transcript_input(
     )
 
 
-def _apply_transcript(session: Session, transcript_input: IngestionTranscriptInput, video, *, overwrite: bool):
+def _apply_transcript(
+    session: Session, transcript_input: IngestionTranscriptInput, video, *, overwrite: bool
+):
     transcript = videos_service.get_transcript(session, video.id)
 
     if transcript:
@@ -1174,6 +1262,20 @@ def _resolve_youtube_channel_id(youtube_channel: str) -> str:
     )
 
 
+def _resolve_youtube_channel_id_for_run(session: Session, youtube_channel: str) -> str:
+    channel_id = _extract_channel_id_from_input(youtube_channel)
+    if channel_id:
+        return channel_id
+
+    channel_handle = _extract_channel_handle_from_input(youtube_channel)
+    if channel_handle:
+        existing = channels_service.get_by_channel_handle(session, channel_handle)
+        if existing and existing.youtube_channel_id:
+            return existing.youtube_channel_id
+
+    return _resolve_youtube_channel_id(youtube_channel)
+
+
 def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylistInfo:
     channel_url = f"https://www.youtube.com/channel/{channel_id}/videos"
     opts = {
@@ -1195,7 +1297,9 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
 
     info = info or {}
     # Channel-level metadata from the playlist response
-    channel_name: str | None = str(info.get("channel") or info.get("uploader") or "").strip() or None
+    channel_name: str | None = (
+        str(info.get("channel") or info.get("uploader") or "").strip() or None
+    )
     raw_handle = str(info.get("uploader_id") or "").strip()
     channel_handle: str | None = raw_handle if raw_handle else None
     profile = videos_service.extract_channel_profile_from_info(info) if info else None
@@ -1235,6 +1339,47 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
     )
 
 
+def _ensure_channel_from_playlist(
+    session: Session,
+    channel_id: str,
+    playlist_info: _ChannelPlaylistInfo,
+) -> tuple[Any, str]:
+    metadata = _playlist_video_metadata(channel_id, playlist_info)
+    data = IngestionYoutubeRequest(
+        person=_playlist_person_hint(playlist_info),
+        video={"video_url": f"https://www.youtube.com/channel/{channel_id}"},
+    )
+    channel, action = _resolve_channel(session, data, metadata)
+    if playlist_info.profile:
+        _attach_channel_profile(
+            session,
+            youtube_channel_id=channel_id,
+            channel_handle=playlist_info.channel_handle,
+            profile=playlist_info.profile,
+        )
+        session.commit()
+        session.refresh(channel)
+    return channel, action
+
+
+def _ensure_video_for_transcript_attempt(
+    session: Session,
+    *,
+    channel_id: int,
+    candidate: _ChannelVideoCandidate,
+    video_metadata: dict[str, Any],
+):
+    data = IngestionYoutubeRequest(
+        video={
+            "video_url": candidate.video_url,
+            "title": candidate.title,
+            "published_at": candidate.published_at,
+        }
+    )
+    video, _ = _resolve_video(session, data, channel_id, None, video_metadata)
+    return video
+
+
 def ingest_youtube(
     session: Session,
     data: IngestionYoutubeRequest,
@@ -1265,20 +1410,38 @@ def ingest_youtube_by_url(
     return ingest_youtube(session, data)
 
 
+def _has_owner_hint(data: IngestionYoutubeRequest) -> bool:
+    if data.person is None:
+        return False
+    return bool(data.person.id or data.person.name or data.person.platform_handle)
+
+
+def _should_fetch_youtube_metadata(data: IngestionYoutubeRequest) -> bool:
+    # A caller-provided transcript plus an explicit owner is already enough to
+    # store the video. Avoid spending YouTube/Webshare bandwidth just to enrich
+    # optional metadata; the watcher path passes playlist metadata explicitly.
+    if data.transcript is not None and _has_owner_hint(data):
+        return False
+    return True
+
+
 def _ingest_youtube_pipeline(
     session: Session,
     data: IngestionYoutubeRequest,
+    *,
+    video_metadata_override: dict | None = None,
 ) -> IngestionYoutubeResponse:
-    video_metadata = None
-    try:
-        video_metadata = videos_service.fetch_youtube_metadata(data.video.video_url)
-    except videos_service.YouTubeMetadataFetchError:
-        logger.warning(
-            "YouTube metadata fetch failed for url=%s, using payload data",
-            data.video.video_url,
-            exc_info=True,
-        )
-        video_metadata = None
+    video_metadata = video_metadata_override
+    if video_metadata is None and _should_fetch_youtube_metadata(data):
+        try:
+            video_metadata = videos_service.fetch_youtube_metadata(data.video.video_url)
+        except videos_service.YouTubeMetadataFetchError:
+            logger.warning(
+                "YouTube metadata fetch failed for url=%s, using payload data",
+                data.video.video_url,
+                exc_info=True,
+            )
+            video_metadata = None
 
     channel, channel_action = _resolve_channel(
         session,
@@ -1343,31 +1506,15 @@ def ingest_youtube_channel(
     session: Session,
     data: IngestionYoutubeChannelRunRequest,
 ) -> IngestionYoutubeChannelRunResponse:
-    channel_id = _resolve_youtube_channel_id(data.youtube_channel)
+    channel_id = _resolve_youtube_channel_id_for_run(session, data.youtube_channel)
     playlist_info = _list_recent_channel_videos(channel_id, data.video_count)
     candidates = playlist_info.candidates
+    channel, _channel_action = _ensure_channel_from_playlist(session, channel_id, playlist_info)
 
     # Build a person hint from what we already know about the channel so that
     # _resolve_channel can identify the owner even when per-video metadata fetch
     # fails (e.g. YouTube bot-detection blocks yt-dlp on the server).
-    person_hint: dict | None = None
-    if playlist_info.channel_name or playlist_info.channel_handle:
-        person_hint = {
-            "name": playlist_info.channel_name,
-            "platform_handle": playlist_info.channel_handle,
-        }
-
-    # Opportunistically attach the channel profile (avatar, banner, subs, …)
-    # to the existing DB channel — if we already know it. When the channel is
-    # brand new it will be created later during per-video ingestion and we
-    # enrich it again at the end of this function.
-    if playlist_info.profile:
-        _attach_channel_profile(
-            session,
-            youtube_channel_id=channel_id,
-            channel_handle=playlist_info.channel_handle,
-            profile=playlist_info.profile,
-        )
+    person_hint = _playlist_person_hint(playlist_info)
 
     videos_ingested = 0
     videos_skipped_existing = 0
@@ -1376,22 +1523,54 @@ def ingest_youtube_channel(
     results: list[IngestionYoutubeChannelRunVideoResult] = []
 
     for candidate in candidates:
+        video_metadata = _playlist_video_metadata(channel_id, playlist_info, candidate)
         existing_video = videos_service.get_by_video_id(session, candidate.video_id)
         if existing_video is None:
             existing_video = videos_service.get_by_url(session, candidate.video_url)
 
         if existing_video is not None:
-            videos_skipped_existing += 1
-            results.append(
-                IngestionYoutubeChannelRunVideoResult(
-                    youtube_video_id=candidate.video_id,
-                    video_url=candidate.video_url,
-                    status="skipped_existing",
-                    video_id=existing_video.id,
-                    detail="Video is already extracted in database.",
+            if videos_service.get_transcript(session, existing_video.id):
+                videos_skipped_existing += 1
+                results.append(
+                    IngestionYoutubeChannelRunVideoResult(
+                        youtube_video_id=candidate.video_id,
+                        video_url=candidate.video_url,
+                        status="skipped_existing",
+                        video_id=existing_video.id,
+                        detail="Video is already extracted in database.",
+                    )
                 )
+                continue
+            if not videos_service.transcript_retry_due(existing_video):
+                videos_skipped_no_transcript += 1
+                retry_at = (
+                    existing_video.transcript_next_retry_at.isoformat()
+                    if existing_video.transcript_next_retry_at
+                    else "later"
+                )
+                results.append(
+                    IngestionYoutubeChannelRunVideoResult(
+                        youtube_video_id=candidate.video_id,
+                        video_url=candidate.video_url,
+                        status="skipped_transcript_retry_pending",
+                        video_id=existing_video.id,
+                        detail=f"Transcript retry is scheduled for {retry_at}.",
+                    )
+                )
+                continue
+            video = _ensure_video_for_transcript_attempt(
+                session,
+                channel_id=channel.id,
+                candidate=candidate,
+                video_metadata=video_metadata,
             )
-            continue
+        else:
+            video = _ensure_video_for_transcript_attempt(
+                session,
+                channel_id=channel.id,
+                candidate=candidate,
+                video_metadata=video_metadata,
+            )
 
         try:
             fetched_transcript = videos_service.fetch_transcript_from_youtube(
@@ -1411,6 +1590,12 @@ def ingest_youtube_channel(
                 exc.detail,
                 exc_info=is_hard_failure,
             )
+            videos_service.record_transcript_fetch_failure(
+                session,
+                video,
+                code=exc.code,
+                detail=exc.detail,
+            )
             videos_skipped_no_transcript += 1
             if is_hard_failure:
                 errors_count += 1
@@ -1419,6 +1604,7 @@ def ingest_youtube_channel(
                     youtube_video_id=candidate.video_id,
                     video_url=candidate.video_url,
                     status="skipped_transcript_unavailable",
+                    video_id=video.id,
                     detail=exc.detail,
                 )
             )
@@ -1440,7 +1626,11 @@ def ingest_youtube_channel(
         )
 
         try:
-            ingestion_result = ingest_youtube(session, ingestion_payload)
+            ingestion_result = _ingest_youtube_pipeline(
+                session,
+                ingestion_payload,
+                video_metadata_override=video_metadata,
+            )
         except HTTPException as exc:
             logger.warning(
                 "Ingestion HTTP error for video_id=%s: %s",

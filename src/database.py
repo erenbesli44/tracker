@@ -57,6 +57,12 @@ def _rebuild_video_table_nullable_person(session: Session) -> None:
                 title VARCHAR(500),
                 published_at DATETIME,
                 duration INTEGER,
+                transcript_status VARCHAR(40) NOT NULL DEFAULT 'pending_transcript',
+                transcript_attempt_count INTEGER NOT NULL DEFAULT 0,
+                transcript_last_attempt_at DATETIME,
+                transcript_next_retry_at DATETIME,
+                transcript_last_error_code VARCHAR(80),
+                transcript_last_error_detail VARCHAR,
                 created_at DATETIME NOT NULL,
                 FOREIGN KEY(channel_id) REFERENCES youtube_channel(id),
                 FOREIGN KEY(person_id) REFERENCES person(id)
@@ -69,11 +75,19 @@ def _rebuild_video_table_nullable_person(session: Session) -> None:
             """
             INSERT INTO video_new (
                 id, channel_id, person_id, platform, video_url,
-                video_id, title, published_at, duration, created_at
+                video_id, title, published_at, duration,
+                transcript_status, transcript_attempt_count,
+                transcript_last_attempt_at, transcript_next_retry_at,
+                transcript_last_error_code, transcript_last_error_detail,
+                created_at
             )
             SELECT
                 id, channel_id, person_id, platform, video_url,
-                video_id, title, published_at, duration, created_at
+                video_id, title, published_at, duration,
+                transcript_status, transcript_attempt_count,
+                transcript_last_attempt_at, transcript_next_retry_at,
+                transcript_last_error_code, transcript_last_error_detail,
+                created_at
             FROM video
             """
         )
@@ -130,12 +144,29 @@ def _ensure_post_rebuild_indexes(session: Session) -> None:
     session.exec(text("CREATE INDEX IF NOT EXISTS ix_video_person_id ON video(person_id)"))
     session.exec(text("CREATE INDEX IF NOT EXISTS ix_video_video_id ON video(video_id)"))
     session.exec(text("CREATE INDEX IF NOT EXISTS ix_video_channel_id ON video(channel_id)"))
+    session.exec(
+        text("CREATE INDEX IF NOT EXISTS ix_video_transcript_status ON video(transcript_status)")
+    )
+    session.exec(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_video_transcript_next_retry_at "
+            "ON video(transcript_next_retry_at)"
+        )
+    )
 
     # topic_mention single-column indexes
-    session.exec(text("CREATE INDEX IF NOT EXISTS ix_topic_mention_video_id ON topic_mention(video_id)"))
-    session.exec(text("CREATE INDEX IF NOT EXISTS ix_topic_mention_person_id ON topic_mention(person_id)"))
-    session.exec(text("CREATE INDEX IF NOT EXISTS ix_topic_mention_topic_id ON topic_mention(topic_id)"))
-    session.exec(text("CREATE INDEX IF NOT EXISTS ix_topic_mention_channel_id ON topic_mention(channel_id)"))
+    session.exec(
+        text("CREATE INDEX IF NOT EXISTS ix_topic_mention_video_id ON topic_mention(video_id)")
+    )
+    session.exec(
+        text("CREATE INDEX IF NOT EXISTS ix_topic_mention_person_id ON topic_mention(person_id)")
+    )
+    session.exec(
+        text("CREATE INDEX IF NOT EXISTS ix_topic_mention_topic_id ON topic_mention(topic_id)")
+    )
+    session.exec(
+        text("CREATE INDEX IF NOT EXISTS ix_topic_mention_channel_id ON topic_mention(channel_id)")
+    )
 
     # timeline composite indexes
     session.exec(
@@ -169,14 +200,62 @@ def _run_postgres_migrations(session: Session) -> None:
     session.exec(
         text("ALTER TABLE youtube_channel ADD COLUMN IF NOT EXISTS channel_metadata VARCHAR")
     )
+    session.exec(text("ALTER TABLE transcript ADD COLUMN IF NOT EXISTS segments_json VARCHAR"))
     session.exec(
-        text("ALTER TABLE transcript ADD COLUMN IF NOT EXISTS segments_json VARCHAR")
+        text(
+            "ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_status "
+            "VARCHAR(40) NOT NULL DEFAULT 'pending_transcript'"
+        )
     )
     session.exec(
-        text("ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_length INTEGER NOT NULL DEFAULT 1")
+        text(
+            "ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_attempt_count "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
     )
     session.exec(
-        text("ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_tweet_ids VARCHAR")
+        text("ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_last_attempt_at TIMESTAMP")
+    )
+    session.exec(
+        text("ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_next_retry_at TIMESTAMP")
+    )
+    session.exec(
+        text("ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_last_error_code VARCHAR(80)")
+    )
+    session.exec(
+        text("ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_last_error_detail VARCHAR")
+    )
+    session.exec(
+        text("CREATE INDEX IF NOT EXISTS ix_video_transcript_status ON video(transcript_status)")
+    )
+    session.exec(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_video_transcript_next_retry_at "
+            "ON video(transcript_next_retry_at)"
+        )
+    )
+    session.exec(
+        text(
+            "ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_length "
+            "INTEGER NOT NULL DEFAULT 1"
+        )
+    )
+    session.exec(text("ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_tweet_ids VARCHAR"))
+    session.exec(
+        text(
+            """
+            UPDATE video
+            SET transcript_status = 'ready',
+                transcript_next_retry_at = NULL,
+                transcript_last_error_code = NULL,
+                transcript_last_error_detail = NULL
+            WHERE EXISTS (
+                SELECT 1
+                FROM transcript
+                WHERE transcript.video_id = video.id
+            )
+            """
+        )
     )
     _merge_dis_siyaset_into_jeopolitik(session)
     _apply_broadened_taxonomy_migration(session)
@@ -404,7 +483,9 @@ def _merge_dis_siyaset_into_jeopolitik(session: Session) -> None:
     _replace_channel_subtopic_slug(session, old_slug="dis-siyaset", new_slug="jeopolitik")
 
     dis_row = session.exec(text("SELECT id FROM topic WHERE slug = 'dis-siyaset' LIMIT 1")).first()
-    jeopolitik_row = session.exec(text("SELECT id FROM topic WHERE slug = 'jeopolitik' LIMIT 1")).first()
+    jeopolitik_row = session.exec(
+        text("SELECT id FROM topic WHERE slug = 'jeopolitik' LIMIT 1")
+    ).first()
 
     dis_topic_id = int(dis_row[0]) if dis_row else None
     jeopolitik_topic_id = int(jeopolitik_row[0]) if jeopolitik_row else None
@@ -463,6 +544,31 @@ def run_lightweight_migrations() -> None:
         if not _sqlite_has_column(session, "video", "channel_id"):
             session.exec(text("ALTER TABLE video ADD COLUMN channel_id INTEGER"))
 
+        if not _sqlite_has_column(session, "video", "transcript_status"):
+            session.exec(
+                text(
+                    "ALTER TABLE video ADD COLUMN transcript_status "
+                    "VARCHAR(40) NOT NULL DEFAULT 'pending_transcript'"
+                )
+            )
+        if not _sqlite_has_column(session, "video", "transcript_attempt_count"):
+            session.exec(
+                text(
+                    "ALTER TABLE video ADD COLUMN transcript_attempt_count "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+        if not _sqlite_has_column(session, "video", "transcript_last_attempt_at"):
+            session.exec(text("ALTER TABLE video ADD COLUMN transcript_last_attempt_at DATETIME"))
+        if not _sqlite_has_column(session, "video", "transcript_next_retry_at"):
+            session.exec(text("ALTER TABLE video ADD COLUMN transcript_next_retry_at DATETIME"))
+        if not _sqlite_has_column(session, "video", "transcript_last_error_code"):
+            session.exec(
+                text("ALTER TABLE video ADD COLUMN transcript_last_error_code VARCHAR(80)")
+            )
+        if not _sqlite_has_column(session, "video", "transcript_last_error_detail"):
+            session.exec(text("ALTER TABLE video ADD COLUMN transcript_last_error_detail VARCHAR"))
+
         if not _sqlite_has_column(session, "topic_mention", "channel_id"):
             session.exec(text("ALTER TABLE topic_mention ADD COLUMN channel_id INTEGER"))
 
@@ -470,7 +576,9 @@ def run_lightweight_migrations() -> None:
             session.exec(text("ALTER TABLE transcript ADD COLUMN segments_json VARCHAR"))
 
         if not _sqlite_has_column(session, "twitter_post", "thread_length"):
-            session.exec(text("ALTER TABLE twitter_post ADD COLUMN thread_length INTEGER NOT NULL DEFAULT 1"))
+            session.exec(
+                text("ALTER TABLE twitter_post ADD COLUMN thread_length INTEGER NOT NULL DEFAULT 1")
+            )
 
         if not _sqlite_has_column(session, "twitter_post", "thread_tweet_ids"):
             session.exec(text("ALTER TABLE twitter_post ADD COLUMN thread_tweet_ids VARCHAR"))
@@ -492,15 +600,27 @@ def run_lightweight_migrations() -> None:
                 text("ALTER TABLE youtube_channel ADD COLUMN primary_topic_slug VARCHAR(100)")
             )
         if not _sqlite_has_column(session, "youtube_channel", "expected_subtopics"):
-            session.exec(
-                text("ALTER TABLE youtube_channel ADD COLUMN expected_subtopics VARCHAR")
-            )
+            session.exec(text("ALTER TABLE youtube_channel ADD COLUMN expected_subtopics VARCHAR"))
         if not _sqlite_has_column(session, "youtube_channel", "channel_metadata"):
-            session.exec(
-                text("ALTER TABLE youtube_channel ADD COLUMN channel_metadata VARCHAR")
-            )
+            session.exec(text("ALTER TABLE youtube_channel ADD COLUMN channel_metadata VARCHAR"))
 
         _ensure_post_rebuild_indexes(session)
+        session.exec(
+            text(
+                """
+                UPDATE video
+                SET transcript_status = 'ready',
+                    transcript_next_retry_at = NULL,
+                    transcript_last_error_code = NULL,
+                    transcript_last_error_detail = NULL
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM transcript
+                    WHERE transcript.video_id = video.id
+                )
+                """
+            )
+        )
 
         # Backfill channels from legacy person rows.
         session.exec(

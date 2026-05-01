@@ -18,6 +18,12 @@ class Video(SQLModel, table=True):
     title: Optional[str] = Field(default=None, max_length=500)
     published_at: Optional[datetime] = Field(default=None)
     duration: Optional[int] = Field(default=None)  # seconds
+    transcript_status: str = Field(default="pending_transcript", max_length=40, index=True)
+    transcript_attempt_count: int = Field(default=0)
+    transcript_last_attempt_at: Optional[datetime] = Field(default=None)
+    transcript_next_retry_at: Optional[datetime] = Field(default=None, index=True)
+    transcript_last_error_code: Optional[str] = Field(default=None, max_length=80)
+    transcript_last_error_detail: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now)
 
 

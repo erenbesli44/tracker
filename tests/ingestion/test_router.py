@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from httpx import AsyncClient
+from sqlmodel import select
 
 
 async def _topic_id_by_slug(client: AsyncClient, slug: str) -> int:
@@ -326,14 +327,14 @@ async def test_ingest_youtube_channel_processes_last_n_and_skips_existing(
     assert payload["youtube_channel_id"] == "UC1111111111111111111111"
     assert payload["requested_video_count"] == 3
     assert payload["videos_detected"] == 3
-    assert payload["videos_ingested"] == 2
-    assert payload["videos_skipped_existing"] == 1
+    assert payload["videos_ingested"] == 3
+    assert payload["videos_skipped_existing"] == 0
     assert payload["videos_skipped_no_transcript"] == 0
     assert payload["errors_count"] == 0
 
     statuses = [item["status"] for item in payload["results"]]
-    assert statuses.count("skipped_existing") == 1
-    assert statuses.count("ingested") == 2
+    assert statuses.count("skipped_existing") == 0
+    assert statuses.count("ingested") == 3
 
     videos = (await client.get("/videos/")).json()
     assert len(videos) == 3
@@ -420,6 +421,161 @@ async def test_ingest_youtube_channel_second_run_skips_already_extracted(
     assert transcript_fetch_calls["count"] == 2
 
 
+async def test_ingest_youtube_channel_remembers_unavailable_transcript_until_retry(
+    client: AsyncClient, session, monkeypatch
+):
+    from src.ingestion import service as ingestion_service
+    from src.videos.models import Video
+
+    candidate = ingestion_service._ChannelVideoCandidate(
+        video_id="FFFFFFFFFFF",
+        video_url="https://www.youtube.com/watch?v=FFFFFFFFFFF",
+        title="No transcript yet",
+        published_at=datetime(2026, 4, 10, 12, 0, 0),
+    )
+    fetch_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        ingestion_service,
+        "_resolve_youtube_channel_id",
+        lambda _channel: "UC3333333333333333333333",
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "_list_recent_channel_videos",
+        lambda _channel_id, _limit: ingestion_service._ChannelPlaylistInfo(
+            candidates=[candidate],
+            channel_name="Retry Channel",
+            channel_handle="@retrychannel",
+        ),
+    )
+
+    def unavailable(_video_id: str, _langs=None):
+        fetch_calls["count"] += 1
+        raise ingestion_service.videos_service.YouTubeTranscriptFetchError(
+            code="transcript_unavailable",
+            detail="No transcript is available yet.",
+        )
+
+    monkeypatch.setattr(
+        ingestion_service.videos_service,
+        "fetch_transcript_from_youtube",
+        unavailable,
+    )
+
+    first_run = await client.post(
+        "/ingestions/youtube/channel",
+        json={"youtube_channel": "@retrychannel", "video_count": 1},
+    )
+    assert first_run.status_code == 200
+    assert first_run.json()["videos_skipped_no_transcript"] == 1
+    assert fetch_calls["count"] == 1
+
+    stored = session.exec(select(Video).where(Video.video_id == "FFFFFFFFFFF")).one()
+    assert stored.transcript_status == "transcript_unavailable"
+    assert stored.transcript_attempt_count == 1
+    assert stored.transcript_next_retry_at is not None
+
+    second_run = await client.post(
+        "/ingestions/youtube/channel",
+        json={"youtube_channel": "@retrychannel", "video_count": 1},
+    )
+    assert second_run.status_code == 200
+    payload = second_run.json()
+    assert payload["videos_ingested"] == 0
+    assert payload["results"][0]["status"] == "skipped_transcript_retry_pending"
+    assert fetch_calls["count"] == 1
+
+
+async def test_ingest_youtube_channel_retries_pending_video_when_due(
+    client: AsyncClient, session, monkeypatch
+):
+    from src.ingestion import service as ingestion_service
+    from src.videos.models import Transcript, Video
+
+    candidate = ingestion_service._ChannelVideoCandidate(
+        video_id="GGGGGGGGGGG",
+        video_url="https://www.youtube.com/watch?v=GGGGGGGGGGG",
+        title="Transcript later",
+        published_at=datetime(2026, 4, 10, 12, 0, 0),
+    )
+    fetch_calls = {"count": 0}
+    metadata_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        ingestion_service,
+        "_resolve_youtube_channel_id",
+        lambda _channel: "UC4444444444444444444444",
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "_list_recent_channel_videos",
+        lambda _channel_id, _limit: ingestion_service._ChannelPlaylistInfo(
+            candidates=[candidate],
+            channel_name="Later Channel",
+            channel_handle="@laterchannel",
+        ),
+    )
+
+    def fetch_transcript(video_id: str, _langs=None):
+        fetch_calls["count"] += 1
+        if fetch_calls["count"] == 1:
+            raise ingestion_service.videos_service.YouTubeTranscriptFetchError(
+                code="transcript_unavailable",
+                detail="No transcript yet.",
+            )
+        return {
+            "full_text": f"Transcript for {video_id}",
+            "language": "tr",
+            "segments": [{"start": 0, "duration": 1, "text": "ready"}],
+            "is_generated": False,
+            "languages_tried": ["tr"],
+        }
+
+    def fetch_metadata(_url: str):
+        metadata_calls["count"] += 1
+        raise AssertionError("channel ingestion should reuse playlist metadata")
+
+    monkeypatch.setattr(
+        ingestion_service.videos_service,
+        "fetch_transcript_from_youtube",
+        fetch_transcript,
+    )
+    monkeypatch.setattr(
+        ingestion_service.videos_service,
+        "fetch_youtube_metadata",
+        fetch_metadata,
+    )
+
+    first_run = await client.post(
+        "/ingestions/youtube/channel",
+        json={"youtube_channel": "@laterchannel", "video_count": 1},
+    )
+    assert first_run.status_code == 200
+    assert first_run.json()["videos_skipped_no_transcript"] == 1
+
+    stored = session.exec(select(Video).where(Video.video_id == "GGGGGGGGGGG")).one()
+    stored.transcript_next_retry_at = datetime(2000, 1, 1)
+    session.add(stored)
+    session.commit()
+
+    second_run = await client.post(
+        "/ingestions/youtube/channel",
+        json={"youtube_channel": "@laterchannel", "video_count": 1},
+    )
+    assert second_run.status_code == 200
+    payload = second_run.json()
+    assert payload["videos_ingested"] == 1
+    assert payload["results"][0]["status"] == "ingested"
+    assert fetch_calls["count"] == 2
+    assert metadata_calls["count"] == 0
+
+    refreshed = session.exec(select(Video).where(Video.video_id == "GGGGGGGGGGG")).one()
+    assert refreshed.transcript_status == "ready"
+    assert refreshed.transcript_next_retry_at is None
+    assert session.exec(select(Transcript).where(Transcript.video_id == refreshed.id)).one()
+
+
 async def test_ingest_youtube_skips_analytics_when_llm_unavailable(
     client: AsyncClient, monkeypatch
 ):
@@ -473,12 +629,10 @@ async def test_ingest_youtube_skips_analytics_when_llm_unavailable(
 
 
 async def test_ingest_youtube_does_not_regenerate_analytics_for_reused_video(
-    client: AsyncClient, monkeypatch
+    client: AsyncClient, session, monkeypatch
 ):
     from src.ingestion import service as ingestion_service
     from src.topics import service as topics_service
-    from src.database import engine
-    from sqlmodel import Session
 
     monkeypatch.setattr(
         ingestion_service.videos_service,
@@ -491,9 +645,8 @@ async def test_ingest_youtube_does_not_regenerate_analytics_for_reused_video(
     )
 
     # Pull a real topic id so the payload validates against TopicMentionCreate.
-    with Session(engine) as s:
-        topic = topics_service.get_by_slug(s, "ekonomi") or topics_service.list_all(s)[0]
-        topic_id = topic.id
+    topic = topics_service.get_by_slug(session, "ekonomi") or topics_service.list_all(session)[0]
+    topic_id = topic.id
 
     # Seed the first run with summary + classification provided in the request
     # (no LLM needed). The second run should reuse the existing rows.

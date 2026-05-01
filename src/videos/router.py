@@ -184,6 +184,12 @@ def fetch_transcript(
     try:
         fetched = service.fetch_transcript_from_youtube(video.video_id, data.languages)
     except service.YouTubeTranscriptFetchError as exc:
+        service.record_transcript_fetch_failure(
+            session,
+            video,
+            code=exc.code,
+            detail=exc.detail,
+        )
         if exc.code == "provider_error":
             raise YouTubeTranscriptProviderError() from exc
         raise YouTubeTranscriptUnavailable(exc.detail) from exc

@@ -1,8 +1,16 @@
+import os
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
+os.environ["API_KEY"] = "test-api-key"
+os.environ["DATABASE_URL"] = "sqlite://"
+os.environ["YOUTUBE_PROXY_ENABLED"] = "false"
+os.environ["WEBSHARE_API_KEY"] = ""
+
+from src.config import settings
 from src.database import get_session
 from src.main import app
 
@@ -15,11 +23,11 @@ def session_fixture():
         poolclass=StaticPool,
     )
     # import all models so their metadata is registered
-    import src.persons.models  # noqa: F401
     import src.channels.models  # noqa: F401
-    import src.videos.models  # noqa: F401
-    import src.topics.models  # noqa: F401
     import src.classification.models  # noqa: F401
+    import src.persons.models  # noqa: F401
+    import src.topics.models  # noqa: F401
+    import src.videos.models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
 
@@ -41,6 +49,7 @@ async def client_fixture(session: Session):
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
+        headers={"X-API-Key": settings.API_KEY},
     ) as client:
         yield client
     app.dependency_overrides.clear()

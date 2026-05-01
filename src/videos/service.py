@@ -5,15 +5,12 @@ import re
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 import yt_dlp
-
-logger = logging.getLogger(__name__)
-
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -35,7 +32,14 @@ from src.videos.schemas import (
     VideoUpdate,
 )
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_TRANSCRIPT_LANGUAGES = ["tr", "en"]
+TRANSCRIPT_STATUS_PENDING = "pending_transcript"
+TRANSCRIPT_STATUS_READY = "ready"
+TRANSCRIPT_STATUS_TRANSCRIPT_UNAVAILABLE = "transcript_unavailable"
+TRANSCRIPT_STATUS_VIDEO_UNAVAILABLE = "video_unavailable"
+TRANSCRIPT_STATUS_PROVIDER_ERROR = "provider_error"
 
 _transcript_retryable: list[type[Exception]] = []
 for _err_name in ("IpBlocked", "RequestBlocked", "VideoUnplayable"):
@@ -106,6 +110,7 @@ def _refresh_webshare_inventory(force: bool = False) -> None:
             return
 
     import requests
+
     headers = {"Authorization": f"Token {settings.WEBSHARE_API_KEY}"}
     base = settings.WEBSHARE_API_BASE_URL.rstrip("/")
     timeout = max(1.0, float(settings.WEBSHARE_API_TIMEOUT_SECONDS))
@@ -191,6 +196,72 @@ def _retry_delay_seconds(attempt_index: int) -> float:
     return min(cap, (base * (2**attempt_index)) + random.uniform(0.0, base))
 
 
+def _transcript_failure_status(code: str) -> str:
+    if code == "provider_error":
+        return TRANSCRIPT_STATUS_PROVIDER_ERROR
+    if code == "video_unavailable":
+        return TRANSCRIPT_STATUS_VIDEO_UNAVAILABLE
+    return TRANSCRIPT_STATUS_TRANSCRIPT_UNAVAILABLE
+
+
+def _transcript_retry_delay(code: str, attempt_count: int) -> timedelta:
+    multiplier = 2 ** min(max(attempt_count - 1, 0), 10)
+    if code == "provider_error":
+        base_seconds = max(
+            60.0,
+            _safe_float(settings.YOUTUBE_TRANSCRIPT_PROVIDER_RETRY_BASE_MINUTES, 30.0) * 60.0,
+        )
+        cap_seconds = max(
+            base_seconds,
+            _safe_float(settings.YOUTUBE_TRANSCRIPT_PROVIDER_RETRY_MAX_HOURS, 6.0) * 3600.0,
+        )
+    else:
+        base_seconds = max(
+            3600.0,
+            _safe_float(settings.YOUTUBE_TRANSCRIPT_UNAVAILABLE_RETRY_BASE_HOURS, 6.0) * 3600.0,
+        )
+        cap_seconds = max(
+            base_seconds,
+            _safe_float(settings.YOUTUBE_TRANSCRIPT_UNAVAILABLE_RETRY_MAX_DAYS, 7.0) * 86400.0,
+        )
+    return timedelta(seconds=min(cap_seconds, base_seconds * multiplier))
+
+
+def transcript_retry_due(video: Video, now: datetime | None = None) -> bool:
+    if video.transcript_next_retry_at is None:
+        return True
+    return video.transcript_next_retry_at <= (now or utc_now())
+
+
+def mark_transcript_ready(session: Session, video: Video) -> None:
+    video.transcript_status = TRANSCRIPT_STATUS_READY
+    video.transcript_next_retry_at = None
+    video.transcript_last_error_code = None
+    video.transcript_last_error_detail = None
+    session.add(video)
+
+
+def record_transcript_fetch_failure(
+    session: Session,
+    video: Video,
+    *,
+    code: str,
+    detail: str,
+) -> Video:
+    now = utc_now()
+    attempt_count = max(0, int(video.transcript_attempt_count or 0)) + 1
+    video.transcript_status = _transcript_failure_status(code)
+    video.transcript_attempt_count = attempt_count
+    video.transcript_last_attempt_at = now
+    video.transcript_next_retry_at = now + _transcript_retry_delay(code, attempt_count)
+    video.transcript_last_error_code = code[:80]
+    video.transcript_last_error_detail = detail[:1000]
+    session.add(video)
+    session.commit()
+    session.refresh(video)
+    return video
+
+
 def _sleep_request_pacing() -> None:
     low = max(0.0, _safe_float(settings.YOUTUBE_REQUEST_MIN_DELAY_SECONDS, 0.5))
     high = max(low, _safe_float(settings.YOUTUBE_REQUEST_MAX_DELAY_SECONDS, 1.5))
@@ -269,7 +340,6 @@ def _select_direct_proxy(force_rotate: bool = False) -> tuple[str | None, str | 
         size = len(targets)
         start = (_PROXY_CURSOR + (1 if force_rotate else 0)) % size
         selected_idx: int | None = None
-        fallback_idx: int | None = None
         soonest_available: float | None = None
 
         for offset in range(size):
@@ -282,12 +352,16 @@ def _select_direct_proxy(force_rotate: bool = False) -> tuple[str | None, str | 
                 break
             if soonest_available is None or cooldown_until < soonest_available:
                 soonest_available = cooldown_until
-                fallback_idx = idx
 
         if selected_idx is None:
-            selected_idx = fallback_idx if fallback_idx is not None else start
+            if soonest_available is not None:
+                logger.warning(
+                    "All direct YouTube proxies are cooling down; next available in %.1fs",
+                    max(0.0, soonest_available - now),
+                )
+            return None, None
 
-        _PROXY_CURSOR = selected_idx
+        _PROXY_CURSOR = (selected_idx + 1) % size
         host_port = targets[selected_idx]
 
     host, sep, port_text = host_port.partition(":")
@@ -313,11 +387,13 @@ def _select_proxy_url(force_rotate: bool = False) -> tuple[str | None, str | Non
     return _select_direct_proxy(force_rotate=force_rotate)
 
 
-def _no_ssl_session() -> "requests.Session":
+def _no_ssl_session() -> Any:
     import requests
+
     session = requests.Session()
     session.verify = False
     import urllib3
+
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     return session
 
@@ -338,7 +414,9 @@ def _build_transcript_client(force_rotate: bool = False) -> tuple[YouTubeTranscr
         locations = _parse_csv(settings.WEBSHARE_PROXY_FILTER_IP_LOCATIONS)
         if locations:
             kwargs["filter_ip_locations"] = locations
-        return YouTubeTranscriptApi(proxy_config=WebshareProxyConfig(**kwargs), http_client=http_client), "webshare-rotating"
+        return YouTubeTranscriptApi(
+            proxy_config=WebshareProxyConfig(**kwargs), http_client=http_client
+        ), "webshare-rotating"
 
     proxy_url, proxy_label = _select_proxy_url(force_rotate=force_rotate)
     if proxy_url:
@@ -493,7 +571,11 @@ def fetch_youtube_metadata(video_url: str) -> dict[str, Any]:
 
     # yt-dlp provides the video's original language as ISO 639-1 code (e.g. "tr", "en").
     raw_language = info.get("language")
-    language = raw_language.strip().lower() if isinstance(raw_language, str) and raw_language.strip() else None
+    language = (
+        raw_language.strip().lower()
+        if isinstance(raw_language, str) and raw_language.strip()
+        else None
+    )
 
     return {
         "title": title,
@@ -598,7 +680,9 @@ def extract_channel_profile_from_info(info: dict[str, Any]) -> dict[str, Any]:
         "subscriber_count": _int_or_none(info.get("channel_follower_count")),
         "view_count": _int_or_none(info.get("view_count")),
         "video_count": _int_or_none(info.get("playlist_count")),
-        "is_verified": info.get("channel_is_verified") if isinstance(info.get("channel_is_verified"), bool) else None,
+        "is_verified": info.get("channel_is_verified")
+        if isinstance(info.get("channel_is_verified"), bool)
+        else None,
         "description": _str_or_none(info.get("description")),
         "tags": _str_list(info.get("tags")),
         "avatar_url": avatar_url,
@@ -714,10 +798,13 @@ def fetch_publish_date_from_html(video_url: str) -> datetime | None:
     Looks for datePublished in JSON-LD or meta tags.
     """
     canonical = canonicalize_youtube_url(video_url)
-    request = Request(canonical, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
+    request = Request(
+        canonical,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
     _sleep_request_pacing()
     with _youtube_request_slot():
         with urlopen(request, timeout=15) as response:  # nosec B310
@@ -746,9 +833,7 @@ def fetch_publish_date_from_html(video_url: str) -> datetime | None:
 
 def backfill_published_dates(session: Session) -> list[dict]:
     """Fetch and update published_at for all videos missing it."""
-    videos = list(
-        session.exec(select(Video).where(Video.published_at.is_(None))).all()
-    )
+    videos = list(session.exec(select(Video).where(Video.published_at.is_(None))).all())
     results: list[dict] = []
     for video in videos:
         publish_date: datetime | None = None
@@ -774,9 +859,17 @@ def backfill_published_dates(session: Session) -> list[dict]:
             video.published_at = publish_date
             session.add(video)
             session.flush()
-            results.append({"video_id": video.id, "status": "updated", "published_at": publish_date.isoformat()})
+            results.append(
+                {
+                    "video_id": video.id,
+                    "status": "updated",
+                    "published_at": publish_date.isoformat(),
+                }
+            )
         else:
-            results.append({"video_id": video.id, "status": "failed", "published_at": None, "errors": errors})
+            results.append(
+                {"video_id": video.id, "status": "failed", "published_at": None, "errors": errors}
+            )
 
     if results:
         session.commit()
@@ -909,6 +1002,7 @@ def add_transcript(session: Session, video: Video, data: TranscriptCreate) -> Tr
         segments_json=_serialize_transcript_segments(data.segments),
         language=data.language,
     )
+    mark_transcript_ready(session, video)
     session.add(transcript)
     session.commit()
     session.refresh(transcript)
@@ -926,6 +1020,9 @@ def update_transcript(
     transcript.raw_text = raw_text
     transcript.segments_json = _serialize_transcript_segments(segments)
     transcript.language = language
+    video = session.get(Video, transcript.video_id)
+    if video:
+        mark_transcript_ready(session, video)
     session.add(transcript)
     session.commit()
     session.refresh(transcript)
@@ -1018,7 +1115,9 @@ def fetch_transcript_from_youtube(
             ) from exc
         except Exception as exc:
             _mark_proxy_failure(proxy_label)
-            retryable = isinstance(exc, _TRANSCRIPT_BLOCK_ERRORS) or _is_retryable_provider_error(exc)
+            retryable = isinstance(exc, _TRANSCRIPT_BLOCK_ERRORS) or _is_retryable_provider_error(
+                exc
+            )
             logger.warning(
                 "Transcript fetch failed attempt=%d/%d error=%s proxy=%s",
                 attempt + 1,
