@@ -55,6 +55,15 @@ channels:
   - handle: "@yatirim101"
     name: "Yatırım 101"
     video_count: 4
+  - handle: "@EmreŞİRİNileBorsaveFinans"
+    name: "Emre Şirin"
+    video_count: 4
+  - handle: "@EkonomiEkranı"
+    name: "EkonomiEkranı"
+    video_count: 4
+  - handle: "@boraozkentlenasdaq"
+    name: "Bora Özkent"
+    video_count: 4
 
 
 # Example entries:
