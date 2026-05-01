@@ -1,0 +1,36 @@
+src/database.py
+  f6ed49888bfa592c 537-538
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "e1f6d9bb887f9b181d2ea03db8e19c32e846e78e",
+  "prompts": {
+    "61a1e12adf74e614": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a006905-2242-4f65-957d-bc398cd22d89",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "f6ed49888bfa592c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ea8733e9-6898-4a84-bd1f-fcc854cc1492",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
