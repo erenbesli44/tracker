@@ -6,22 +6,16 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "local"
     APP_VERSION: str = "0.1.0"
     API_KEY: str | None = None  # required X-API-Key header value for all endpoints except /health
-    GEMINI_API_KEY: str | None = None
-    # API model id for "Gemini 3.1 Flash Lite".
-    GEMINI_MODEL: str = "gemini-3.1-flash-lite-preview"
-    GEMINI_TIMEOUT_SECONDS: int = 90
-    GEMINI_RETRY_MAX_ATTEMPTS: int = 4
-    GEMINI_RETRY_BASE_DELAY_SECONDS: float = 1.5
-    GEMINI_RETRY_MAX_DELAY_SECONDS: float = 20.0
     LLM_DEFAULT_OUTPUT_LANGUAGE: str = "tr"
     MINIMAX_BASE_URL: str | None = None  # OpenAI-compatible, e.g. https://api.minimax.io/v1
     MINIMAX_API_KEY: str | None = None
     MINIMAX_MODEL: str = "MiniMax-M2.7"
-    # Per-request timeout for MiniMax. Default raised from 90s because MiniMax
-    # commonly takes 60-180s to emit a long JSON analysis, and the previous
-    # default tripped APITimeoutError on slow-path requests during backfills.
-    # Falls back to GEMINI_TIMEOUT_SECONDS when unset for backwards compat.
-    MINIMAX_TIMEOUT_SECONDS: int | None = 240
+    # Per-request timeout for MiniMax. MiniMax commonly takes 60-180s to emit
+    # a long JSON analysis, so the default is generous.
+    MINIMAX_TIMEOUT_SECONDS: int = 240
+    MINIMAX_RETRY_MAX_ATTEMPTS: int = 4
+    MINIMAX_RETRY_BASE_DELAY_SECONDS: float = 1.5
+    MINIMAX_RETRY_MAX_DELAY_SECONDS: float = 20.0
     MINIMAX_SYSTEM_PROMPT: str = (
         "You are a helpful assistant that always responds with a single valid "
         "JSON object and no surrounding prose."

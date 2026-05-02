@@ -1,12 +1,9 @@
-"""Transcript analysis helpers backed by MiniMax (Anthropic-compatible) or Gemini."""
+"""Transcript analysis helpers — MiniMax (OpenAI-compatible) only."""
 
 import json
 import logging
 import time
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 import openai
 
@@ -20,7 +17,6 @@ from src.llm.prompts import (
     SUMMARY_PROMPT_TEMPLATE,
 )
 
-DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 _RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
 _RETRYABLE_ERROR_PHRASES = (
     "high demand",
@@ -126,65 +122,8 @@ def _extract_json_payload(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
-def _extract_text_from_gemini_response(payload: dict[str, Any]) -> str:
-    candidates = payload.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        raise LLMGenerationError("Gemini response has no candidates.")
-
-    finish_reason = candidates[0].get("finishReason")
-    if isinstance(finish_reason, str) and finish_reason.upper() in {"MAX_TOKENS", "LENGTH"}:
-        raise LLMGenerationError(
-            f"Gemini truncated output (finishReason={finish_reason}); falling back."
-        )
-
-    content = candidates[0].get("content")
-    if not isinstance(content, dict):
-        raise LLMGenerationError("Gemini response content is missing.")
-
-    parts = content.get("parts")
-    if not isinstance(parts, list) or not parts:
-        raise LLMGenerationError("Gemini response parts are missing.")
-
-    chunks: list[str] = []
-    for part in parts:
-        if isinstance(part, dict) and isinstance(part.get("text"), str):
-            chunks.append(part["text"])
-
-    if not chunks:
-        raise LLMGenerationError("Gemini response has no text part.")
-    return "\n".join(chunks).strip()
-
-
 def _compact_error_text(value: str) -> str:
     return " ".join(value.split()).strip()
-
-
-def _read_http_error_body(exc: HTTPError, max_chars: int = 300) -> str:
-    try:
-        raw = exc.read()
-    except Exception:
-        return ""
-    if not raw:
-        return ""
-    try:
-        text = raw.decode("utf-8", errors="replace")
-    except Exception:
-        return ""
-    return _compact_error_text(text)[:max_chars]
-
-
-def _parse_retry_after_seconds(exc: HTTPError) -> float | None:
-    headers = getattr(exc, "headers", None)
-    if not headers:
-        return None
-    value = headers.get("Retry-After")
-    if not value:
-        return None
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        return None
-    return max(0.0, seconds)
 
 
 def _is_retryable_http_error(status_code: int, body: str) -> bool:
@@ -196,9 +135,9 @@ def _is_retryable_http_error(status_code: int, body: str) -> bool:
 
 def _retry_delay_seconds(attempt: int, retry_after: float | None) -> float:
     if retry_after is not None:
-        return min(retry_after, settings.GEMINI_RETRY_MAX_DELAY_SECONDS)
-    base = max(0.1, float(settings.GEMINI_RETRY_BASE_DELAY_SECONDS))
-    max_delay = max(base, float(settings.GEMINI_RETRY_MAX_DELAY_SECONDS))
+        return min(retry_after, settings.MINIMAX_RETRY_MAX_DELAY_SECONDS)
+    base = max(0.1, float(settings.MINIMAX_RETRY_BASE_DELAY_SECONDS))
+    max_delay = max(base, float(settings.MINIMAX_RETRY_MAX_DELAY_SECONDS))
     return min(max_delay, base * (2 ** (attempt - 1)))
 
 
@@ -238,10 +177,8 @@ def _call_minimax_json(prompt: str) -> dict[str, Any]:
         raise LLMGenerationError("MINIMAX_BASE_URL and MINIMAX_API_KEY must be configured.")
 
     model_name = settings.MINIMAX_MODEL or "MiniMax-M2.7"
-    max_attempts = max(1, int(settings.GEMINI_RETRY_MAX_ATTEMPTS))
-    # Prefer MINIMAX_TIMEOUT_SECONDS when set; fall back to the shared LLM timeout.
-    raw_timeout = settings.MINIMAX_TIMEOUT_SECONDS or settings.GEMINI_TIMEOUT_SECONDS
-    timeout_seconds = max(15, int(raw_timeout))
+    max_attempts = max(1, int(settings.MINIMAX_RETRY_MAX_ATTEMPTS))
+    timeout_seconds = max(15, int(settings.MINIMAX_TIMEOUT_SECONDS))
 
     client = openai.OpenAI(
         api_key=settings.MINIMAX_API_KEY,
@@ -321,117 +258,6 @@ def _call_minimax_json(prompt: str) -> dict[str, Any]:
 
 def _is_minimax_configured() -> bool:
     return bool(settings.MINIMAX_BASE_URL and settings.MINIMAX_API_KEY)
-
-
-def _call_gemini_json(prompt: str) -> dict[str, Any]:
-    if not settings.GEMINI_API_KEY:
-        raise LLMGenerationError("GEMINI_API_KEY is not configured.")
-
-    model_name = settings.GEMINI_MODEL.strip() or DEFAULT_GEMINI_MODEL
-    encoded_model = quote(model_name, safe="")
-
-    max_attempts = max(1, int(settings.GEMINI_RETRY_MAX_ATTEMPTS))
-    timeout_seconds = max(15, int(settings.GEMINI_TIMEOUT_SECONDS))
-
-    endpoint = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{encoded_model}:generateContent?key={settings.GEMINI_API_KEY}"
-    )
-    request_payload = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "responseMimeType": "application/json",
-            "maxOutputTokens": 8192,
-        },
-    }
-    body = json.dumps(request_payload).encode("utf-8")
-    request = Request(
-        endpoint,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    raw_response = ""
-    for attempt in range(1, max_attempts + 1):
-        try:
-            with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310
-                raw_response = response.read().decode("utf-8")
-                logger.info(
-                    "Gemini call succeeded with model=%s attempt=%d/%d",
-                    model_name,
-                    attempt,
-                    max_attempts,
-                )
-                break
-        except TimeoutError as exc:
-            if attempt < max_attempts:
-                delay = _retry_delay_seconds(attempt, None)
-                logger.warning(
-                    "Gemini timeout with model=%s attempt=%d/%d; retrying in %.1fs",
-                    model_name,
-                    attempt,
-                    max_attempts,
-                    delay,
-                )
-                time.sleep(delay)
-                continue
-            logger.warning("Gemini timeout with model=%s", model_name)
-            raise LLMGenerationError("Gemini timeout during generation.") from exc
-        except HTTPError as exc:
-            error_body = _read_http_error_body(exc)
-            retry_after = _parse_retry_after_seconds(exc)
-            retryable = _is_retryable_http_error(exc.code, error_body)
-            if retryable and attempt < max_attempts:
-                delay = _retry_delay_seconds(attempt, retry_after)
-                logger.warning(
-                    "Gemini HTTP %d with model=%s attempt=%d/%d; retrying in %.1fs; body=%s",
-                    exc.code,
-                    model_name,
-                    attempt,
-                    max_attempts,
-                    delay,
-                    error_body or "<empty>",
-                )
-                time.sleep(delay)
-                continue
-            logger.error(
-                "Gemini HTTP %d with model=%s; body=%s",
-                exc.code,
-                model_name,
-                error_body or "<empty>",
-            )
-            raise LLMGenerationError("Gemini HTTP error during generation.") from exc
-        except URLError as exc:
-            if attempt < max_attempts:
-                delay = _retry_delay_seconds(attempt, None)
-                logger.warning(
-                    "Gemini network error with model=%s attempt=%d/%d; retrying in %.1fs: %s",
-                    model_name,
-                    attempt,
-                    max_attempts,
-                    delay,
-                    exc.reason,
-                )
-                time.sleep(delay)
-                continue
-            logger.error("Gemini network error: %s", exc.reason)
-            raise LLMGenerationError("Gemini network error during generation.") from exc
-        except Exception as exc:
-            logger.error("Unexpected Gemini error: %s", exc)
-            raise LLMGenerationError("Unexpected Gemini generation error.") from exc
-
-    if not raw_response:
-        raise LLMGenerationError("Gemini generation returned no response.")
-
-    try:
-        payload = json.loads(raw_response)
-    except json.JSONDecodeError as exc:
-        raise LLMGenerationError("Gemini response is not valid JSON.") from exc
-
-    content_text = _extract_text_from_gemini_response(payload)
-    return _extract_json_payload(content_text)
 
 
 def _call_llm_json(prompt: str) -> dict[str, Any]:
