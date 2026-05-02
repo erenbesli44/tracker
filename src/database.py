@@ -10,6 +10,13 @@ from src.config import settings
 _engine_kwargs: dict = {"echo": False}
 if settings.DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # pool_pre_ping recycles dead connections silently. Required because long
+    # external calls (LLM, yt-dlp) can outlast Postgres' wait_timeout / firewall
+    # idle limits and a stale checkout would otherwise raise OperationalError
+    # mid-pipeline.
+    _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_recycle"] = 1800
 
 engine = create_engine(settings.DATABASE_URL, **_engine_kwargs)
 

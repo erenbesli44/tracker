@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     MINIMAX_BASE_URL: str | None = None  # OpenAI-compatible, e.g. https://api.minimax.io/v1
     MINIMAX_API_KEY: str | None = None
     MINIMAX_MODEL: str = "MiniMax-M2.7"
+    # Per-request timeout for MiniMax. Default raised from 90s because MiniMax
+    # commonly takes 60-180s to emit a long JSON analysis, and the previous
+    # default tripped APITimeoutError on slow-path requests during backfills.
+    # Falls back to GEMINI_TIMEOUT_SECONDS when unset for backwards compat.
+    MINIMAX_TIMEOUT_SECONDS: int | None = 240
     MINIMAX_SYSTEM_PROMPT: str = (
         "You are a helpful assistant that always responds with a single valid "
         "JSON object and no surrounding prose."

@@ -239,7 +239,9 @@ def _call_minimax_json(prompt: str) -> dict[str, Any]:
 
     model_name = settings.MINIMAX_MODEL or "MiniMax-M2.7"
     max_attempts = max(1, int(settings.GEMINI_RETRY_MAX_ATTEMPTS))
-    timeout_seconds = max(15, int(settings.GEMINI_TIMEOUT_SECONDS))
+    # Prefer MINIMAX_TIMEOUT_SECONDS when set; fall back to the shared LLM timeout.
+    raw_timeout = settings.MINIMAX_TIMEOUT_SECONDS or settings.GEMINI_TIMEOUT_SECONDS
+    timeout_seconds = max(15, int(raw_timeout))
 
     client = openai.OpenAI(
         api_key=settings.MINIMAX_API_KEY,

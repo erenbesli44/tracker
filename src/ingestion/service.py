@@ -34,7 +34,13 @@ from src.persons import service as persons_service
 from src.topics import service as topics_service
 from src.videos import service as videos_service
 from src.videos.exceptions import InvalidYouTubeUrl
+from src.videos.models import Transcript, Video, VideoSummary
 from src.videos.schemas import TranscriptCreate, VideoCreate, VideoSummaryCreate
+
+# Cap the per-channel sweep so a backlog of stuck videos doesn't make any
+# single watcher run unbounded. Stuck videos are processed oldest-first, so
+# the queue drains across consecutive runs.
+MAX_STUCK_RETRIES_PER_CHANNEL = 5
 
 logger = logging.getLogger(__name__)
 
@@ -1506,6 +1512,185 @@ def _ingest_youtube_pipeline(
     )
 
 
+def _retry_incomplete_videos_for_channel(
+    session: Session,
+    channel,
+    *,
+    transcript_languages: list[str] | None,
+    skip_video_ids: set[str],
+) -> tuple[int, int, list[IngestionYoutubeChannelRunVideoResult]]:
+    """Retry videos for this channel that have an incomplete pipeline state.
+
+    Catches videos that have fallen off the channel's recent-N YouTube playlist
+    window and were stuck mid-pipeline (transcript fetch failed transiently,
+    LLM was down, etc.). Three categories handled:
+
+    1. No transcript and ``transcript_status`` is retryable + retry-due → fetch
+       transcript fresh and run the full pipeline.
+    2. Transcript exists but no summary or no classification → run analytics-only
+       backfill (no extra YouTube fetch).
+    3. ``published_at`` is NULL → fetched as a side effect of (1)/(2) when
+       ``video_metadata_override=None`` makes the pipeline call fetch metadata.
+
+    Returns ``(recovered, errors, results)``.
+    """
+    incomplete_stmt = (
+        select(Video)
+        .where(Video.channel_id == channel.id)
+        .where(
+            (
+                ~select(Transcript.id)
+                .where(Transcript.video_id == Video.id)
+                .exists()
+            )
+            | (
+                ~select(VideoSummary.id)
+                .where(VideoSummary.video_id == Video.id)
+                .exists()
+            )
+            | (
+                ~select(TopicMention.id)
+                .where(TopicMention.video_id == Video.id)
+                .exists()
+            )
+        )
+        .where(Video.transcript_status != videos_service.TRANSCRIPT_STATUS_VIDEO_UNAVAILABLE)
+        .order_by(Video.created_at.asc())
+        .limit(MAX_STUCK_RETRIES_PER_CHANNEL * 4)  # over-fetch then filter in Python
+    )
+    incomplete_videos = list(session.exec(incomplete_stmt).all())
+
+    recovered = 0
+    errors = 0
+    results: list[IngestionYoutubeChannelRunVideoResult] = []
+    processed = 0
+
+    for video in incomplete_videos:
+        if processed >= MAX_STUCK_RETRIES_PER_CHANNEL:
+            break
+        if video.video_id in skip_video_ids:
+            continue  # Already handled in the recent-N candidate loop.
+
+        existing_transcript = videos_service.get_transcript(session, video.id)
+
+        # ── Branch A: transcript missing ──────────────────────────────────────
+        if existing_transcript is None:
+            if not videos_service.transcript_retry_due(video):
+                continue
+            try:
+                fetched = videos_service.fetch_transcript_from_youtube(
+                    video.video_id, transcript_languages
+                )
+            except videos_service.YouTubeTranscriptFetchError as exc:
+                videos_service.record_transcript_fetch_failure(
+                    session, video, code=exc.code, detail=exc.detail
+                )
+                if exc.code == "provider_error":
+                    errors += 1
+                    results.append(
+                        IngestionYoutubeChannelRunVideoResult(
+                            youtube_video_id=video.video_id,
+                            video_url=video.video_url,
+                            status="failed",
+                            video_id=video.id,
+                            detail=f"stuck-retry transcript fetch failed: {exc.detail}",
+                        )
+                    )
+                processed += 1
+                continue
+
+            # No person_hint here: omitting it makes _should_fetch_youtube_metadata
+            # return True, so the pipeline calls fetch_youtube_metadata and fills
+            # in published_at/title/duration on videos that were originally
+            # ingested with NULL fields.
+            payload = IngestionYoutubeRequest(
+                video={
+                    "video_url": video.video_url,
+                    "title": video.title,
+                    "published_at": video.published_at,
+                },
+                transcript={
+                    "raw_text": fetched["full_text"],
+                    "language": str(fetched.get("language", "tr")),
+                    "segments": fetched.get("segments"),
+                },
+                overwrite={"transcript": True, "summary": True, "classification": True},
+            )
+        else:
+            # ── Branch B: transcript exists, analytics missing ────────────────
+            needs_summary = videos_service.get_summary(session, video.id) is None
+            has_classification = (
+                session.exec(
+                    select(TopicMention).where(TopicMention.video_id == video.id)
+                ).first()
+                is not None
+            )
+            needs_classification = not has_classification
+            if not needs_summary and not needs_classification:
+                continue  # Race: filled in since the SELECT above.
+
+            # Same rationale as Branch A — letting metadata be fetched also fixes
+            # NULL published_at on legacy rows.
+            payload = IngestionYoutubeRequest(
+                video={
+                    "video_url": video.video_url,
+                    "title": video.title,
+                    "published_at": video.published_at,
+                },
+                transcript={
+                    "raw_text": existing_transcript.raw_text,
+                    "language": existing_transcript.language,
+                    "segments": videos_service.parse_transcript_segments(
+                        existing_transcript.segments_json
+                    ),
+                },
+                overwrite={"transcript": False, "summary": True, "classification": True},
+            )
+
+        # ── Run the pipeline. Letting video_metadata_override=None means the
+        #    pipeline calls fetch_youtube_metadata, which also fills in
+        #    published_at/duration/title for videos missing them. ───────────────
+        try:
+            _ingest_youtube_pipeline(session, payload, video_metadata_override=None)
+            logger.info(
+                "Stuck-video retry recovered video_id=%s url=%s",
+                video.id,
+                video.video_url,
+            )
+            recovered += 1
+            results.append(
+                IngestionYoutubeChannelRunVideoResult(
+                    youtube_video_id=video.video_id,
+                    video_url=video.video_url,
+                    status="ingested",
+                    video_id=video.id,
+                    detail="stuck-retry recovered",
+                )
+            )
+        except Exception as exc:
+            session.rollback()
+            logger.warning(
+                "Stuck-video retry failed video_id=%s url=%s: %s",
+                video.id,
+                video.video_url,
+                exc,
+                exc_info=True,
+            )
+            errors += 1
+            results.append(
+                IngestionYoutubeChannelRunVideoResult(
+                    youtube_video_id=video.video_id,
+                    video_url=video.video_url,
+                    status="failed",
+                    video_id=video.id,
+                    detail=f"stuck-retry error: {type(exc).__name__}: {str(exc)[:200]}",
+                )
+            )
+        processed += 1
+
+    return recovered, errors, results
+
+
 def ingest_youtube_channel(
     session: Session,
     data: IngestionYoutubeChannelRunRequest,
@@ -1706,6 +1891,26 @@ def ingest_youtube_channel(
                 status="ingested",
                 video_id=ingestion_result.video_id,
             )
+        )
+
+    # Retry videos that fell off the recent-N playlist window with incomplete
+    # state — transcripts that failed transiently, summaries the LLM dropped,
+    # missing published_at, etc. Bounded per run to keep cost flat.
+    recovered, retry_errors, retry_results = _retry_incomplete_videos_for_channel(
+        session,
+        channel,
+        transcript_languages=data.transcript_languages,
+        skip_video_ids={c.video_id for c in candidates},
+    )
+    if recovered or retry_errors or retry_results:
+        videos_ingested += recovered
+        errors_count += retry_errors
+        results.extend(retry_results)
+        logger.info(
+            "Stuck-video sweep for channel=%s recovered=%d errors=%d",
+            channel.name,
+            recovered,
+            retry_errors,
         )
 
     # After the per-video loop the channel is guaranteed to exist if any
