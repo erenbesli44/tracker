@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from src.channels.models import YouTubeChannel
@@ -49,12 +50,20 @@ def find_unposted_summaries(
     *,
     last_n: int = 10,
 ) -> list[tuple[Video, VideoSummary]]:
-    """Return unposted (Video, VideoSummary) pairs from the last N videos by publish date."""
+    """Return unposted (Video, VideoSummary) pairs from the last N videos by recency.
+
+    Sorts by COALESCE(published_at, created_at) DESC so newly-ingested videos
+    surface even when yt-dlp's extract_flat returned no upload_date and
+    published_at is still NULL. A plain `published_at DESC NULLS LAST` would
+    push undated-but-fresh videos behind the limit window — exactly the
+    starvation scenario that broke the bot when 30+ NULL-dated videos piled up.
+    """
     posted_ids = set(session.exec(select(TwitterPost.video_id)).all())
+    recency = func.coalesce(Video.published_at, Video.created_at)
     recent = session.exec(
         select(Video, VideoSummary)
         .join(VideoSummary, VideoSummary.video_id == Video.id)
-        .order_by(Video.published_at.desc())
+        .order_by(recency.desc(), Video.created_at.desc())
         .limit(last_n)
     ).all()
     return [(v, s) for v, s in recent if v.id not in posted_ids]
