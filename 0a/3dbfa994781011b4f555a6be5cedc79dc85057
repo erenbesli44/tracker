@@ -1,0 +1,23 @@
+src/jobs/twitter_post/repository.py
+  3e63061e51105c8b 5,53-60,62,66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "0a3dbfa994781011b4f555a6be5cedc79dc85057",
+  "prompts": {
+    "3e63061e51105c8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e8ccf1e7-4a53-4706-a67b-e40a1364ec95",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 22,
+      "total_deletions": 13,
+      "accepted_lines": 130,
+      "overriden_lines": 0
+    }
+  }
+}
