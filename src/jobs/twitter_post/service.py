@@ -27,11 +27,15 @@ def run_once(
     summary = TweetRunSummary()
     errors: list[str] = []
 
-    candidates = repository.find_unposted_summaries(session, last_n=10)
+    max_posts_per_run = max(1, int(settings.TWITTER_MAX_POSTS_PER_RUN))
+    # Pull a window large enough to absorb posted/skipped rows; the actual cap
+    # on API writes is enforced inside the loop below.
+    candidate_window = max(10, max_posts_per_run * 2)
+    candidates = repository.find_unposted_summaries(session, last_n=candidate_window)
     summary.candidates_found = len(candidates)
     logger.info(
-        "Twitter post run %d: %d candidate(s) from last 10 videos",
-        run.id, summary.candidates_found,
+        "Twitter post run %d: %d candidate(s) (window=%d, cap=%d)",
+        run.id, summary.candidates_found, candidate_window, max_posts_per_run,
     )
 
     if summary.candidates_found == 0:
@@ -58,6 +62,17 @@ def run_once(
         return summary
 
     for video, video_summary in candidates:
+        # Cap on API write attempts (posted + failed). Skipped rows never hit
+        # the API, so they don't count against the cap. Critical for the X
+        # free tier — ~500 writes/month.
+        if (summary.posted + summary.failed) >= max_posts_per_run:
+            logger.info(
+                "Run %d: reached TWITTER_MAX_POSTS_PER_RUN=%d; stopping early "
+                "with %d candidate(s) deferred to next run",
+                run.id, max_posts_per_run, len(candidates) - (summary.posted + summary.failed + summary.skipped),
+            )
+            break
+
         short = (video_summary.short_summary or "").strip()
         if not short:
             logger.warning("Video %s has empty short_summary — skipping", video.video_id)
