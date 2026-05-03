@@ -12,8 +12,6 @@ Exit codes:
 import logging
 import sys
 
-from sqlmodel import Session
-
 logger = logging.getLogger(__name__)
 
 
@@ -65,8 +63,7 @@ def main() -> int:
     from src.database import engine
     from src.jobs.youtube_watch import service
 
-    with Session(engine) as session:
-        summary = service.run_once(session, config)
+    summary = service.run_once(engine, config)
 
     logger.info(
         "Done — channels=%d detected=%d ingested=%d skipped=%d errors=%d",

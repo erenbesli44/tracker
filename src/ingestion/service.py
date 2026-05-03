@@ -1453,6 +1453,9 @@ def _ingest_youtube_pipeline(
             )
             video_metadata = None
 
+    # ── Tx-1: resolve owner + video ───────────────────────────────────────
+    # Commit early so write locks on channel/video rows are released before
+    # the YouTube transcript fetch (10–30 s) that follows.
     channel, channel_action = _resolve_channel(
         session,
         data,
@@ -1467,11 +1470,25 @@ def _ingest_youtube_pipeline(
         None,
         video_metadata,
     )
+    session.commit()
+    session.refresh(channel)
+    session.refresh(video)
 
+    # ── Tx-2: fetch + store transcript ────────────────────────────────────
+    # Commit early so the transcript write lock is released before the LLM
+    # call (60–240 s). Partial state (channel+video without transcript) is
+    # valid — the watcher's backfill picks it up on the next run.
     transcript_input = _resolve_transcript_input(session, data, video, video_metadata)
     transcript, transcript_action = _apply_transcript(
         session, transcript_input, video, overwrite=data.overwrite.transcript
     )
+    session.commit()
+    session.refresh(transcript)
+    session.refresh(video)
+    session.refresh(channel)
+
+    # ── Tx-3: LLM analytics + final commit ────────────────────────────────
+    # No write locks are held during the LLM call.
     _auto_fill_missing_analytics_for_new_video(
         session,
         data,
@@ -1488,7 +1505,6 @@ def _ingest_youtube_pipeline(
 
     classification_mentions, classification_action = _apply_classification(session, data, video)
 
-    # Commit all flushed changes from the pipeline as one transaction.
     session.commit()
 
     actions = IngestionActionResponse(

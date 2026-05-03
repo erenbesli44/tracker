@@ -2,7 +2,7 @@ import json
 from typing import Annotated
 
 from fastapi import Depends
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from src.config import settings
@@ -17,8 +17,28 @@ else:
     # mid-pipeline.
     _engine_kwargs["pool_pre_ping"] = True
     _engine_kwargs["pool_recycle"] = 1800
+    # Background runners (YouTube watch, Twitter post) hold sessions across
+    # LLM/external-IO calls. Raise the pool ceiling so API requests don't
+    # exhaust the pool while a runner is active.
+    _engine_kwargs["pool_size"] = 20
+    _engine_kwargs["max_overflow"] = 30
 
 engine = create_engine(settings.DATABASE_URL, **_engine_kwargs)
+
+if settings.DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        # WAL mode: readers never block writers, writers never block readers.
+        # Critical for local dev — without it a long write (e.g. migration)
+        # blocks all API reads with "database is locked".
+        cursor.execute("PRAGMA journal_mode=WAL")
+        # NORMAL is safe with WAL and avoids a full fsync on every commit.
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        # Wait up to 10 s before raising "database is locked" instead of
+        # failing immediately on write contention.
+        cursor.execute("PRAGMA busy_timeout=10000")
+        cursor.close()
 
 
 def get_session():

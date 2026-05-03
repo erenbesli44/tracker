@@ -4,12 +4,14 @@ import json
 import logging
 
 from fastapi import HTTPException
+from sqlalchemy import Engine
 from sqlmodel import Session
 
 from src.config import settings
 from src.ingestion import service as ingestion_service
 from src.ingestion.schemas import IngestionYoutubeChannelRunRequest
 from src.jobs.youtube_watch import repository
+from src.jobs.youtube_watch.models import YouTubeWatchRun
 from src.jobs.youtube_watch.schemas import (
     ChannelJobResult,
     JobRunSummary,
@@ -21,9 +23,17 @@ from src.videos import service as videos_service
 logger = logging.getLogger(__name__)
 
 
-def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
-    """Execute one full polling cycle across all configured channels."""
-    run = repository.create_run(session)
+def run_once(engine: Engine, config: WatchConfig) -> JobRunSummary:
+    """Execute one full polling cycle across all configured channels.
+
+    Each channel gets its own Session so the connection is released between
+    channels — LLM calls (60-240s each) would otherwise hold the connection
+    for the entire run and exhaust the pool under concurrent API traffic.
+    """
+    with Session(engine) as session:
+        run = repository.create_run(session)
+    run_id = run.id
+
     proxy_source = "webshare-api" if settings.WEBSHARE_API_KEY else "env-static"
     proxy_count = len(videos_service._direct_proxy_targets()) if settings.YOUTUBE_PROXY_ENABLED else 0
     logger.info(
@@ -35,7 +45,7 @@ def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
     )
     logger.info(
         "YouTube watch run started (id=%d, channels=%d)",
-        run.id,
+        run_id,
         len(config.channels),
     )
 
@@ -44,7 +54,7 @@ def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
 
     for watched in config.channels:
         logger.info("Processing channel: %s (%s)", watched.name, watched.identifier)
-        result = _process_channel(session, watched)
+        result = _process_channel(engine, watched)
 
         summary.channels_scanned += 1
         summary.videos_detected += result.videos_detected
@@ -62,19 +72,20 @@ def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
         if result.error_detail:
             channel_errors.append(f"{watched.name}: {result.error_detail}")
 
-        repository.add_channel_result(
-            session,
-            run.id,
-            channel_identifier=result.channel_identifier,
-            channel_name=result.channel_name,
-            resolved_channel_id=result.resolved_channel_id,
-            videos_detected=result.videos_detected,
-            videos_ingested=result.videos_ingested,
-            videos_skipped=result.videos_skipped,
-            errors_count=result.errors_count,
-            error_detail=result.error_detail,
-            status=ch_status,
-        )
+        with Session(engine) as session:
+            repository.add_channel_result(
+                session,
+                run_id,
+                channel_identifier=result.channel_identifier,
+                channel_name=result.channel_name,
+                resolved_channel_id=result.resolved_channel_id,
+                videos_detected=result.videos_detected,
+                videos_ingested=result.videos_ingested,
+                videos_skipped=result.videos_skipped,
+                errors_count=result.errors_count,
+                error_detail=result.error_detail,
+                status=ch_status,
+            )
 
         logger.info(
             "Channel %s — detected=%d ingested=%d skipped=%d errors=%d",
@@ -92,21 +103,23 @@ def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
     else:
         run_status = "partial_fail"
 
-    repository.finalize_run(
-        session,
-        run,
-        status=run_status,
-        channels_scanned=summary.channels_scanned,
-        videos_detected=summary.videos_detected,
-        videos_ingested=summary.videos_ingested,
-        videos_skipped=summary.videos_skipped,
-        errors_count=summary.errors_count,
-        error_details=json.dumps(channel_errors) if channel_errors else None,
-    )
+    with Session(engine) as session:
+        run_obj = session.get(YouTubeWatchRun, run_id)
+        repository.finalize_run(
+            session,
+            run_obj,
+            status=run_status,
+            channels_scanned=summary.channels_scanned,
+            videos_detected=summary.videos_detected,
+            videos_ingested=summary.videos_ingested,
+            videos_skipped=summary.videos_skipped,
+            errors_count=summary.errors_count,
+            error_details=json.dumps(channel_errors) if channel_errors else None,
+        )
 
     logger.info(
         "Run %d finished — status=%s channels=%d detected=%d ingested=%d skipped=%d errors=%d",
-        run.id,
+        run_id,
         run_status,
         summary.channels_scanned,
         summary.videos_detected,
@@ -118,15 +131,16 @@ def run_once(session: Session, config: WatchConfig) -> JobRunSummary:
     return summary
 
 
-def _process_channel(session: Session, watched: WatchedChannel) -> ChannelJobResult:
-    """Run the ingestion pipeline for one channel; never raises."""
+def _process_channel(engine: Engine, watched: WatchedChannel) -> ChannelJobResult:
+    """Run the ingestion pipeline for one channel in its own session; never raises."""
     try:
         request = IngestionYoutubeChannelRunRequest(
             youtube_channel=watched.identifier,
             video_count=watched.video_count,
             transcript_languages=watched.transcript_languages,
         )
-        result = ingestion_service.ingest_youtube_channel(session, request)
+        with Session(engine) as session:
+            result = ingestion_service.ingest_youtube_channel(session, request)
 
         videos_skipped = result.videos_skipped_existing + result.videos_skipped_no_transcript
         error_detail: str | None = None

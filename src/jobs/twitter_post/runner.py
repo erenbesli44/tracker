@@ -12,8 +12,6 @@ Exit codes:
 import logging
 import sys
 
-from sqlmodel import Session
-
 logger = logging.getLogger(__name__)
 
 
@@ -48,8 +46,7 @@ def main() -> int:
     from src.database import engine
     from src.jobs.twitter_post import service
 
-    with Session(engine) as session:
-        summary = service.run_once(session)
+    summary = service.run_once(engine)
 
     logger.info(
         "Done — found=%d posted=%d skipped=%d failed=%d",
