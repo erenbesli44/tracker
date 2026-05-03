@@ -1,3 +1,4 @@
+import math
 from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, status
@@ -21,6 +22,7 @@ from src.videos.exceptions import (
     YouTubeTranscriptUnavailable,
 )
 from src.videos.schemas import (
+    PaginatedVideoResponse,
     TranscriptCreate,
     TranscriptDetailResponse,
     TranscriptFetchRequest,
@@ -104,17 +106,31 @@ def update_video(
     return service.update(session, video, data)
 
 
-@router.get("/", response_model=list[VideoResponse])
+@router.get("/", response_model=PaginatedVideoResponse)
 def list_videos(
     session: SessionDep,
     channel_id: Annotated[Optional[int], Query(ge=1)] = None,
     person_id: Annotated[Optional[int], Query(ge=1)] = None,
-) -> list[VideoResponse]:
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> PaginatedVideoResponse:
+    offset = (page - 1) * size
     if channel_id:
-        return service.list_by_channel(session, channel_id)
-    if person_id:
-        return service.list_by_person(session, person_id)
-    return service.list_all(session)
+        total = service.count_by_channel(session, channel_id)
+        items = service.list_by_channel(session, channel_id, limit=size, offset=offset)
+    elif person_id:
+        total = service.count_by_person(session, person_id)
+        items = service.list_by_person(session, person_id, limit=size, offset=offset)
+    else:
+        total = service.count_all(session)
+        items = service.list_all(session, limit=size, offset=offset)
+    return PaginatedVideoResponse(
+        items=items,
+        total=total,
+        page=page,
+        size=size,
+        pages=math.ceil(total / size) if total else 0,
+    )
 
 
 @router.get("/{video_id}", response_model=VideoWithTranscript)

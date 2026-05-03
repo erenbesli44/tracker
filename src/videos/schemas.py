@@ -100,3 +100,11 @@ class VideoSummaryResponse(CustomModel):
 
 class VideoWithTranscript(VideoResponse):
     transcript: Optional[TranscriptResponse] = None
+
+
+class PaginatedVideoResponse(CustomModel):
+    items: list[VideoResponse]
+    total: int
+    page: int
+    size: int
+    pages: int

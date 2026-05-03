@@ -11,6 +11,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 import yt_dlp
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -876,7 +877,25 @@ def backfill_published_dates(session: Session) -> list[dict]:
     return results
 
 
-def list_by_person(session: Session, person_id: int) -> list[Video]:
+def count_all(session: Session) -> int:
+    return session.exec(select(func.count(Video.id))).one()
+
+
+def count_by_channel(session: Session, channel_id: int) -> int:
+    return session.exec(
+        select(func.count(Video.id)).where(Video.channel_id == channel_id)
+    ).one()
+
+
+def count_by_person(session: Session, person_id: int) -> int:
+    return session.exec(
+        select(func.count(Video.id)).where(Video.person_id == person_id)
+    ).one()
+
+
+def list_by_person(
+    session: Session, person_id: int, *, limit: int = 20, offset: int = 0
+) -> list[Video]:
     return list(
         session.exec(
             select(Video)
@@ -885,11 +904,15 @@ def list_by_person(session: Session, person_id: int) -> list[Video]:
                 Video.published_at.desc().nullslast(),
                 Video.created_at.desc(),
             )
+            .limit(limit)
+            .offset(offset)
         ).all()
     )
 
 
-def list_by_channel(session: Session, channel_id: int) -> list[Video]:
+def list_by_channel(
+    session: Session, channel_id: int, *, limit: int = 20, offset: int = 0
+) -> list[Video]:
     return list(
         session.exec(
             select(Video)
@@ -898,17 +921,22 @@ def list_by_channel(session: Session, channel_id: int) -> list[Video]:
                 Video.published_at.desc().nullslast(),
                 Video.created_at.desc(),
             )
+            .limit(limit)
+            .offset(offset)
         ).all()
     )
 
 
-def list_all(session: Session) -> list[Video]:
+def list_all(session: Session, *, limit: int = 20, offset: int = 0) -> list[Video]:
     return list(
         session.exec(
-            select(Video).order_by(
+            select(Video)
+            .order_by(
                 Video.published_at.desc().nullslast(),
                 Video.created_at.desc(),
             )
+            .limit(limit)
+            .offset(offset)
         ).all()
     )
 
