@@ -1,0 +1,27 @@
+src/videos/service.py
+  1426328176411c8b 14,880-898,907-908,913-915,924-925,930,933-934,938-939
+src/videos/router.py
+  1426328176411c8b 1,25,109,114-117,119-133
+src/videos/schemas.py
+  1426328176411c8b 103-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "e6271cc395d49ce9b9a825474e865790d9e287bb",
+  "prompts": {
+    "1426328176411c8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3e0aee32-2b37-47d7-8630-7326511afbce",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 65,
+      "total_deletions": 13,
+      "accepted_lines": 63,
+      "overriden_lines": 0
+    }
+  }
+}
