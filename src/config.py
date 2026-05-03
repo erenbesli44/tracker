@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     WEBSHARE_API_CACHE_TTL_SECONDS: int = 600  # refresh Webshare inventory at most every 10 min
     WEBSHARE_API_TIMEOUT_SECONDS: float = 10.0
     WATCH_CONFIG_PATH: str = "config/watched_channels.yaml"
+    REDIS_URL: str | None = None  # e.g. redis://:password@host:6379/0
 
     # Twitter / X bot — posts new video summaries as tweets.
     TWITTER_API_KEY: str | None = None

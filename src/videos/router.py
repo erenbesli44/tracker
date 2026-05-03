@@ -8,6 +8,7 @@ from src.database import SessionDep
 from src.llm import service as llm_service
 from src.persons import service as persons_service
 from src.persons.exceptions import PersonNotFound
+from src import cache
 from src.videos import service
 from src.videos.dependencies import ValidVideoDep
 from src.videos.exceptions import (
@@ -34,6 +35,10 @@ from src.videos.schemas import (
 )
 
 router = APIRouter(prefix="/videos", tags=["videos"])
+
+
+def _summary_cache_key(video_id: int) -> str:
+    return f"video:summary:{video_id}"
 
 
 def _summary_to_response(summary) -> VideoSummaryResponse:
@@ -153,17 +158,27 @@ def upsert_video_summary(
     summary = service.get_summary(session, video.id)
     if summary:
         updated = service.update_summary(session, summary, data)
-        return _summary_to_response(updated)
-    created = service.add_summary(session, video, data)
-    return _summary_to_response(created)
+        response = _summary_to_response(updated)
+    else:
+        created = service.add_summary(session, video, data)
+        response = _summary_to_response(created)
+    cache.set_cached(_summary_cache_key(video.id), response.model_dump(mode="json"))
+    return response
 
 
 @router.get("/{video_id}/summary", response_model=VideoSummaryResponse)
 def get_video_summary(video: ValidVideoDep, session: SessionDep) -> VideoSummaryResponse:
+    key = _summary_cache_key(video.id)
+    cached = cache.get_cached(key)
+    if cached:
+        return VideoSummaryResponse.model_validate(cached)
+
     summary = service.get_summary(session, video.id)
     if not summary:
         raise SummaryNotFound()
-    return _summary_to_response(summary)
+    response = _summary_to_response(summary)
+    cache.set_cached(key, response.model_dump(mode="json"))
+    return response
 
 
 @router.post(

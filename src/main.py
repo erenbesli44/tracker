@@ -10,6 +10,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+from src import cache
 from src.database import create_db_and_tables, run_lightweight_migrations
 
 
@@ -36,7 +37,11 @@ async def lifespan(app: FastAPI):
     with Session(engine) as session:
         topics_service.seed_topics(session, TOPIC_SEED)
 
+    cache.connect()
+
     yield
+
+    cache.disconnect()
 
 
 app_configs: dict = {

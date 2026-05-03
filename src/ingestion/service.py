@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 from slugify import slugify
 from sqlmodel import Session, select
 
+from src import cache
 from src.channels import service as channels_service
 from src.channels.schemas import ChannelCreate
 from src.classification import service as classification_service
@@ -35,7 +36,12 @@ from src.topics import service as topics_service
 from src.videos import service as videos_service
 from src.videos.exceptions import InvalidYouTubeUrl
 from src.videos.models import Transcript, Video, VideoSummary
-from src.videos.schemas import TranscriptCreate, VideoCreate, VideoSummaryCreate
+from src.videos.schemas import (
+    TranscriptCreate,
+    VideoCreate,
+    VideoSummaryCreate,
+    VideoSummaryResponse,
+)
 
 # Cap the per-channel sweep so a backlog of stuck videos doesn't make any
 # single watcher run unbounded. Stuck videos are processed oldest-first, so
@@ -1506,6 +1512,23 @@ def _ingest_youtube_pipeline(
     classification_mentions, classification_action = _apply_classification(session, data, video)
 
     session.commit()
+
+    if summary is not None and summary_action in ("created", "updated"):
+        session.refresh(summary)
+        cache.set_cached(
+            f"video:summary:{video.id}",
+            VideoSummaryResponse(
+                id=summary.id,
+                video_id=summary.video_id,
+                short_summary=summary.short_summary,
+                long_summary=summary.long_summary,
+                highlights=videos_service.parse_highlights(summary.highlights),
+                language=summary.language,
+                source=summary.source,
+                created_at=summary.created_at,
+                updated_at=summary.updated_at,
+            ).model_dump(mode="json"),
+        )
 
     actions = IngestionActionResponse(
         person=person_action,
