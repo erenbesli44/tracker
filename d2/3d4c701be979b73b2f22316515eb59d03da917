@@ -1,0 +1,23 @@
+src/videos/service.py
+  1426328176411c8b 905,922,936
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d23d4c701be979b73b2f22316515eb59d03da917",
+  "prompts": {
+    "1426328176411c8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3e0aee32-2b37-47d7-8630-7326511afbce",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 3,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
