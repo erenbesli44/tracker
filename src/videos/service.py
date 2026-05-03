@@ -901,8 +901,8 @@ def list_by_person(
             select(Video)
             .where(Video.person_id == person_id)
             .order_by(
-                Video.published_at.desc().nullslast(),
                 Video.created_at.desc(),
+                Video.published_at.desc().nullslast(),
             )
             .limit(limit)
             .offset(offset)
@@ -918,8 +918,8 @@ def list_by_channel(
             select(Video)
             .where(Video.channel_id == channel_id)
             .order_by(
-                Video.published_at.desc().nullslast(),
                 Video.created_at.desc(),
+                Video.published_at.desc().nullslast(),
             )
             .limit(limit)
             .offset(offset)
@@ -932,8 +932,8 @@ def list_all(session: Session, *, limit: int = 20, offset: int = 0) -> list[Vide
         session.exec(
             select(Video)
             .order_by(
-                Video.published_at.desc().nullslast(),
                 Video.created_at.desc(),
+                Video.published_at.desc().nullslast(),
             )
             .limit(limit)
             .offset(offset)
