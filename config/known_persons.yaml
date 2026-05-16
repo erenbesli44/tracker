@@ -1,0 +1,118 @@
+# Known persons and their title aliases for video-level person detection.
+# aliases: case-insensitive substrings searched in video title.
+# channel_defaults: when no alias matches, fall back to this person for the channel.
+# channel_handle keys are lowercased, @-stripped for matching.
+
+persons:
+  - name: "Atilla Yeşilada"
+    slug: "atilla-yesilada"
+    aliases:
+      - "atilla yeşilada"
+      - "atilla yesilada"
+      - "a. yeşilada"
+      - "yeşilada"
+      - "yesilada"
+
+  - name: "Taner Gener"
+    slug: "taner-gener"
+    aliases:
+      - "taner gener"
+
+  - name: "Cüneyt Paksoy"
+    slug: "cuneyt-paksoy"
+    aliases:
+      - "cüneyt paksoy"
+      - "cuneyt paksoy"
+      - "c. paksoy"
+
+  - name: "Devrim Akyıl"
+    slug: "devrim-akyil"
+    aliases:
+      - "devrim akyıl"
+      - "devrim akyil"
+
+  - name: "İslam Memiş"
+    slug: "islam-memis"
+    aliases:
+      - "islam memiş"
+      - "islam memis"
+      - "i. memiş"
+      - "islammemiş"
+
+  - name: "Tunç Şatıroğlu"
+    slug: "tunc-satiroglu"
+    aliases:
+      - "tunç şatıroğlu"
+      - "tunc satiroglu"
+      - "tunç şatır"
+
+  - name: "Emrah Lafçı"
+    slug: "emrah-lafci"
+    aliases:
+      - "emrah lafçı"
+      - "emrah lafci"
+
+  - name: "Murat Muratoğlu"
+    slug: "murat-muratoglu"
+    aliases:
+      - "murat muratoğlu"
+      - "murat muratoglu"
+
+  - name: "Selçuk Geçer"
+    slug: "selcuk-gecer"
+    aliases:
+      - "selçuk geçer"
+      - "selcuk gecer"
+
+  - name: "Hatice Kolçak"
+    slug: "hatice-kolcak"
+    aliases:
+      - "hatice kolçak"
+      - "hatice kolcak"
+
+  - name: "Barış Soydan"
+    slug: "baris-soydan"
+    aliases:
+      - "barış soydan"
+      - "baris soydan"
+
+  - name: "Erkan Öz"
+    slug: "erkan-oz"
+    aliases:
+      - "erkan öz"
+      - "erkan oz"
+
+  - name: "Emre Şirin"
+    slug: "emre-sirin"
+    aliases:
+      - "emre şirin"
+      - "emre sirin"
+
+  - name: "Bora Özkent"
+    slug: "bora-ozkent"
+    aliases:
+      - "bora özkent"
+      - "bora ozkent"
+
+# channel_defaults: handle (lowercased, without @) → person slug.
+# Used when no alias is found in the video title — i.e. single-host channels.
+channel_defaults:
+  "atillayelada": "atilla-yesilada"       # @ATİLLAYEŞİLADA normalizes to this
+  "atillayesilada": "atilla-yesilada"
+  "devrimakyıl": "devrim-akyil"
+  "devrimakyil": "devrim-akyil"
+  "emrahlafci": "emrah-lafci"
+  "islammemisaltin": "islam-memis"
+  "muratmuratoğlu": "murat-muratoglu"
+  "muratmuratoglu": "murat-muratoglu"
+  "selçukgeçer": "selcuk-gecer"
+  "selcukgecer": "selcuk-gecer"
+  "kanalfinans": "tunc-satiroglu"
+  "haticekolçak": "hatice-kolcak"
+  "haticekolcak": "hatice-kolcak"
+  "barissoydan": "baris-soydan"
+  "erkanöz-i5m": "erkan-oz"
+  "erkanoz-i5m": "erkan-oz"
+  "emreşirinileBorsavefinans": "emre-sirin"
+  "emresirin": "emre-sirin"
+  "boraozkentlenasdaq": "bora-ozkent"

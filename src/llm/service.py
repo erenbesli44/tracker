@@ -14,6 +14,7 @@ from src.llm.prompts import (
     ANALYSIS_PROMPT_TEMPLATE,
     CLASSIFICATION_PROMPT_TEMPLATE,
     ECONOMIC_THESIS_PROMPT_TEMPLATE,
+    MARKET_INFERENCE_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
 )
 
@@ -388,4 +389,52 @@ def generate_analysis_json(
                 attempt,
                 _CONTENT_MAX_ATTEMPTS,
             )
+    return payload
+
+
+def generate_market_inference_json(
+    *,
+    topic_key: str,
+    topic_label: str,
+    sources_block: str,
+    prev_section: str = "",
+) -> dict[str, Any]:
+    """Call LLM for a single topic's market inference. Returns the parsed JSON dict."""
+    if not _is_minimax_configured():
+        raise LLMGenerationError(
+            "MiniMax is not configured (MINIMAX_BASE_URL / MINIMAX_API_KEY missing)."
+        )
+
+    prompt = (
+        MARKET_INFERENCE_PROMPT_TEMPLATE
+        .replace("{{topic_key}}", topic_key)
+        .replace("{{topic_label}}", topic_label)
+        .replace("{{sources_block}}", sources_block)
+        .replace("{{prev_section}}", prev_section)
+    )
+
+    _VALID_DIRECTIONS = {"up", "down", "sideways", "mixed"}
+
+    for attempt in range(1, 3):
+        payload = _call_llm_json(prompt)
+        direction = payload.get("direction", "")
+        confidence = float(payload.get("confidence", 0.0))
+
+        # Validate: confidence<0.5 + directional is invalid
+        if direction in ("up", "down") and confidence < 0.5:
+            logger.warning(
+                "Inference validation failed topic=%s direction=%s confidence=%.2f (attempt %d), retrying",
+                topic_key,
+                direction,
+                confidence,
+                attempt,
+            )
+            if attempt < 2:
+                continue
+
+        if direction not in _VALID_DIRECTIONS:
+            payload["direction"] = "mixed"
+
+        return payload
+
     return payload

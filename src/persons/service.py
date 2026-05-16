@@ -45,6 +45,23 @@ def list_all(session: Session) -> list[Person]:
     return list(session.exec(select(Person).order_by(Person.name)).all())
 
 
+def upsert_known_person(session: Session, slug: str) -> Person | None:
+    """Return existing Person for slug, or create from known_persons.yaml. Returns None if slug unknown."""
+    from src.persons.detector import get_person_name_for_slug
+
+    existing = get_by_slug(session, slug)
+    if existing:
+        return existing
+    name = get_person_name_for_slug(slug)
+    if not name:
+        return None
+    person = Person(name=name, slug=slug)
+    session.add(person)
+    session.flush()
+    session.refresh(person)
+    return person
+
+
 def update(session: Session, person: Person, data: PersonUpdate) -> Person:
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():

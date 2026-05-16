@@ -417,3 +417,59 @@ INPUT METADATA:
 TRANSCRIPT:
 {{transcript}}
 """
+
+# ---------------------------------------------------------------------------
+# Market inference prompt — daily consolidated market view.
+# Called once per topic (e.g. "bitcoin", "dolar-tl") with weighted sources.
+# ---------------------------------------------------------------------------
+
+MARKET_INFERENCE_PROMPT_TEMPLATE = """\
+Sen Türkçe yayın takip platformu için makroekonomik çıkarım uzmanısın.
+Aşağıda belirtilen konu hakkında verilen kaynaklardan piyasa beklentisini çıkar.
+Yanıtını SADECE geçerli bir JSON nesnesi olarak ver — markdown, açıklama, başlık yok.
+Tüm serbest metin alanları Türkçe olmalı.
+
+CÜMLE TAMAMLANMA KURALI:
+Özet her zaman nokta, ünlem veya soru işaretiyle biten tam bir cümleyle bitmelidir.
+Cümleyi asla yarım bırakma; yer kalmıyorsa son cümleyi at, kesme.
+
+YÖN VE GÜVEN BANTLARI:
+- Kaynaklarda net konsensüs (pek çok kaynak aynı yön) → direction=up|down, confidence 0.75-0.95
+- Karışık sinyal ama hafif ağırlık farkı → direction=mixed, confidence 0.50-0.70
+- Yön yok ama tutarlı yatay beklenti → direction=sideways, confidence 0.70+
+- confidence < 0.50 ile direction=up veya direction=down GEÇERSİZDİR; mixed veya sideways kullan.
+
+AĞIRLIK KURALI:
+[agirlik] değeri yüksek kaynaklar düşük ağırlıklı kaynakları eziyor; düşükler sadece güveni düşürebilir.
+
+KONU
+====
+Konu Anahtari : {{topic_key}}
+Konu Basligi  : {{topic_label}}
+
+{{prev_section}}
+
+YENI GELEN KAYNAKLAR
+====================
+(Sadece bu yeni kaynakları değerlendir. Önceki çıkarımı başlangıç noktası olarak kullan.)
+
+{{sources_block}}
+
+CIKTI JSON SEMASI
+=================
+{
+  "direction": "up|down|sideways|mixed",
+  "confidence": 0.0,
+  "summary": "2-3 Türkçe tam cümle. Piyasa beklentisini net açıkla.",
+  "tags": ["etiket1", "etiket2"],
+  "changed_from_prev": false,
+  "change_reason": null,
+  "contributions": [
+    {"video_id": 0, "note": "Bu kaynağın katkısı 1 cümle."}
+  ]
+}
+
+changed_from_prev: Önceki çıkarım yoksa false. Yön veya güven 0.10+ değiştiyse true.
+change_reason: changed_from_prev=true ise doldur, aksi halde null.
+contributions: Bu çıkarımda kullanılan kaynakları listele.
+"""

@@ -1,0 +1,57 @@
+# Inference source weights.
+# Rules are evaluated top-to-bottom; first match wins.
+# person: matched against Video.person.slug (case-insensitive)
+# channel: matched against YouTubeChannel.channel_handle (lowercased, @-stripped)
+# topics: optional list of inference_key slugs; if set, weight applies ONLY for those topics
+# weight: 2.0=high, 1.0=medium, 0.5=low, 0.0=exclude
+
+default_weight: 1.0
+min_weight_to_include: 0.1
+
+rules:
+  # Channel handles below are lowercased + @-stripped + non-alphanumeric removed
+  # (same as weights._normalize_handle). Turkish chars are stripped by this transform.
+  # Example: @MeseleEkonomi → meseleekonomi, @DevrimAkyıl → devrimakyl
+
+  # ── Mesele Ekonomi: only Atilla Yeşilada episodes ─────────────────────────
+  - channel: "meseleekonomi"
+    person: "atilla-yesilada"
+    weight: 2.0
+  - channel: "meseleekonomi"
+    weight: 0.0
+
+  # ── NCM Investment TR: only Taner Gener ───────────────────────────────────
+  - channel: "ncminvesttr"
+    person: "taner-gener"
+    weight: 2.0
+  - channel: "ncminvesttr"
+    weight: 0.0
+
+  # ── Integral Forextv ──────────────────────────────────────────────────────
+  - channel: "integralforextv"
+    person: "atilla-yesilada"
+    weight: 2.0
+  - channel: "integralforextv"
+    person: "cuneyt-paksoy"
+    weight: 0.5
+  - channel: "integralforextv"
+    weight: 0.0
+
+  # ── Devrim Akyıl: low weight (@DevrimAkyıl → devrimakyl) ──────────────────
+  - channel: "devrimakyl"
+    weight: 0.5
+
+  # ── İslam Memiş: high only for altın/gümüş ────────────────────────────────
+  - channel: "islammemisaltin"
+    topics: ["altin", "gumus"]
+    weight: 2.0
+  - channel: "islammemisaltin"
+    weight: 0.0
+
+  # ── Kanal Finans (Tunç Şatıroğlu): medium ────────────────────────────────
+  - channel: "kanalfinans"
+    weight: 1.0
+
+  # ── Atilla Yeşilada's own channel: high (@ATİLLAYEŞİLADA → atillayeilada) ─
+  - channel: "atillayeilada"
+    weight: 2.0

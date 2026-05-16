@@ -988,6 +988,23 @@ def _resolve_published_at(
     return None
 
 
+def _resolve_person_from_title(
+    session: Session,
+    title: str | None,
+    channel_handle: str | None,
+) -> tuple[int | None, str]:
+    from src.persons import detector as person_detector
+    from src.persons import service as persons_service
+
+    slug = person_detector.detect_person(title, channel_handle)
+    if not slug:
+        return None, "skipped"
+    person = persons_service.upsert_known_person(session, slug)
+    if not person:
+        return None, "skipped"
+    return person.id, "detected"
+
+
 def _resolve_video(
     session: Session,
     data: IngestionYoutubeRequest,
@@ -1469,11 +1486,17 @@ def _ingest_youtube_pipeline(
     )
     person_action = "skipped"
 
+    video_title = (
+        data.video.title
+        or (video_metadata.get("title") if video_metadata else None)
+    )
+    person_id, person_action = _resolve_person_from_title(session, video_title, channel.channel_handle)
+
     video, video_action = _resolve_video(
         session,
         data,
         channel.id,
-        None,
+        person_id,
         video_metadata,
     )
     session.commit()
