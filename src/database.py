@@ -284,6 +284,18 @@ def _run_postgres_migrations(session: Session) -> None:
             """
         )
     )
+    # Widen contribution_note from VARCHAR(500) to unbounded TEXT (idempotent)
+    session.exec(
+        text(
+            """
+            DO $$
+            BEGIN
+                ALTER TABLE market_inference_source ALTER COLUMN contribution_note TYPE TEXT;
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+            """
+        )
+    )
     _merge_dis_siyaset_into_jeopolitik(session)
     _apply_broadened_taxonomy_migration(session)
     session.commit()

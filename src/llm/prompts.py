@@ -430,8 +430,8 @@ Yanıtını SADECE geçerli bir JSON nesnesi olarak ver — markdown, açıklama
 Tüm serbest metin alanları Türkçe olmalı.
 
 CÜMLE TAMAMLANMA KURALI:
-Özet her zaman nokta, ünlem veya soru işaretiyle biten tam bir cümleyle bitmelidir.
-Cümleyi asla yarım bırakma; yer kalmıyorsa son cümleyi at, kesme.
+`summary` ve her `contributions[*].note` alanı her zaman nokta, ünlem veya soru işaretiyle
+biten tam bir cümleyle bitmelidir. Cümleyi asla yarım bırakma; uzunsa son cümleyi at, kesme.
 
 YÖN VE GÜVEN BANTLARI:
 - Kaynaklarda net konsensüs (pek çok kaynak aynı yön) → direction=up|down, confidence 0.75-0.95

@@ -257,7 +257,7 @@ def _parse_inference_payload(
                     topic_key=topic_key,
                     video_id=vid_id,
                     weight_used=source_map[vid_id].weight,
-                    contribution_note=str(note)[:500] if note else None,
+                    contribution_note=str(note) if note else None,
                 )
             )
 

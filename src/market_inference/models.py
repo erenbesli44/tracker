@@ -49,5 +49,5 @@ class MarketInferenceSource(SQLModel, table=True):
     topic_key: str = Field(max_length=40)
     video_id: int = Field(foreign_key="video.id", index=True)
     weight_used: float = Field(default=1.0)
-    contribution_note: Optional[str] = Field(default=None, max_length=500)
+    contribution_note: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now)
