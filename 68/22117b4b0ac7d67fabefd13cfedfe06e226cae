@@ -1,0 +1,67 @@
+src/market_inference/router.py
+  s_3376462028de23::t_c224b8cb9ca034 1-210
+src/main.py
+  s_3376462028de23::t_18713b991bd72c 27
+  s_3376462028de23::t_b3a2cdbff9efbe 84
+  s_3376462028de23::t_5d3eccf4f80c31 71
+config/inference_weights.yaml
+  s_3376462028de23::t_62801620e65192 1-11,16,18-19,21-23,25-26,28-39,42-54,57
+  s_3376462028de23::t_aaf51eab938e5f 12-15,17,20,24,27,40-41,55-56
+src/llm/service.py
+  s_3376462028de23::t_fe799a0b6ddef8 393-440
+  s_3376462028de23::t_df264818cd13d5 17
+src/persons/service.py
+  s_3376462028de23::t_fc2ad809e8afc4 48-64
+src/market_inference/constants.py
+  s_3376462028de23::t_73aefb6d6bbb0a 1-34
+src/market_inference/models.py
+  s_3376462028de23::t_8efcbfcd4042e5 1-53
+src/market_inference/weights.py
+  s_3376462028de23::t_845ea515fb7cfd 1-71
+config/known_persons.yaml
+  s_3376462028de23::t_c863d56fdc9fda 1-118
+src/llm/prompts.py
+  s_3376462028de23::t_42e0aac9fa5798 420-475
+scripts/backfill_video_person.py
+  s_3376462028de23::t_b64c1c33132773 1-83
+src/market_inference/service.py
+  s_3376462028de23::t_ee06e98bff8fbf 1-435
+src/market_inference/schemas.py
+  s_3376462028de23::t_c91aa70d4e8f6d 1-67
+src/ingestion/service.py
+  s_3376462028de23::t_e584e8af0d0f96 991-1007
+  s_3376462028de23::t_24e988d72edd87 1489-1494,1499
+src/jobs/market_inference/runner.py
+  s_3376462028de23::t_06b47b5ed5c03c 1-72
+src/persons/detector.py
+  s_3376462028de23::t_b7c93d7f18c000 1-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "6822117b4b0ac7d67fabefd13cfedfe06e226cae",
+  "prompts": {
+    "1426328176411c8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3e0aee32-2b37-47d7-8630-7326511afbce",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>",
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  },
+  "sessions": {
+    "s_3376462028de23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "54081e8e-c53a-47cb-85f5-8365ca8192d1",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
