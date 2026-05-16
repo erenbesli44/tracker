@@ -414,9 +414,20 @@ def generate_market_inference_json(
     )
 
     _VALID_DIRECTIONS = {"up", "down", "sideways", "mixed"}
+    _MAX_ATTEMPTS = 3
 
-    for attempt in range(1, 3):
-        payload = _call_llm_json(prompt)
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            payload = _call_llm_json(prompt)
+        except LLMGenerationError as exc:
+            if attempt < _MAX_ATTEMPTS:
+                logger.warning(
+                    "Inference JSON parse error topic=%s attempt=%d/%d, retrying: %s",
+                    topic_key, attempt, _MAX_ATTEMPTS, exc,
+                )
+                continue
+            raise
+
         direction = payload.get("direction", "")
         confidence = float(payload.get("confidence", 0.0))
 
@@ -429,7 +440,7 @@ def generate_market_inference_json(
                 confidence,
                 attempt,
             )
-            if attempt < 2:
+            if attempt < _MAX_ATTEMPTS:
                 continue
 
         if direction not in _VALID_DIRECTIONS:

@@ -33,7 +33,7 @@ from src.videos.models import Video
 
 logger = logging.getLogger(__name__)
 
-_COLD_START_HOURS = 48  # window when no prior run exists
+_COLD_START_HOURS = 168  # 7 days — ensures first run has enough data
 
 
 @dataclass
@@ -90,8 +90,17 @@ def _collect_sources(
         .join(Person, Video.person_id == Person.id, isouter=True)  # type: ignore[arg-type]
         .where(TopicMention.topic_id.in_(topic_ids))  # type: ignore[attr-defined]
         .where(TopicMention.confidence >= MIN_CONFIDENCE_THRESHOLD)
-        .where(Video.published_at >= window_start)
-        .where(Video.published_at <= window_end)
+        .where(
+            # Use published_at when available, fall back to created_at
+            (Video.published_at >= window_start) | (  # type: ignore[operator]
+                (Video.published_at.is_(None)) & (Video.created_at >= window_start)  # type: ignore[attr-defined]
+            )
+        )
+        .where(
+            (Video.published_at <= window_end) | (  # type: ignore[operator]
+                (Video.published_at.is_(None)) & (Video.created_at <= window_end)  # type: ignore[attr-defined]
+            )
+        )
     ).all()
 
     items: list[_SourceItem] = []
