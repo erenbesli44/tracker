@@ -1,0 +1,22 @@
+src/llm/service.py
+  s_3376462028de23::t_b84ceb4868fbfc 417-429,443
+src/market_inference/service.py
+  s_3376462028de23::t_271e7b60357c3b 93-103
+  s_3376462028de23::t_cc5692e10cf9d8 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "b5de9a116eee30bd58054732ca8e2bd1e5ef924d",
+  "prompts": {},
+  "sessions": {
+    "s_3376462028de23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "54081e8e-c53a-47cb-85f5-8365ca8192d1",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
