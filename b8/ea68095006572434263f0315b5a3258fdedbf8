@@ -1,0 +1,19 @@
+src/ingestion/schemas.py
+  s_2145a30ec4f74e::t_6945f079bd11ee 79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b8ea68095006572434263f0315b5a3258fdedbf8",
+  "prompts": {},
+  "sessions": {
+    "s_2145a30ec4f74e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "14063e32-8a02-4e9c-bd6f-4b1a4eede615",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
