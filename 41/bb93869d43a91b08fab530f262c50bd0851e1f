@@ -1,0 +1,19 @@
+config/watched_channels.yaml
+  s_2145a30ec4f74e::t_0e431ed25b4110 55-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "41bb93869d43a91b08fab530f262c50bd0851e1f",
+  "prompts": {},
+  "sessions": {
+    "s_2145a30ec4f74e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "14063e32-8a02-4e9c-bd6f-4b1a4eede615",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
