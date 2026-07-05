@@ -1,0 +1,79 @@
+src/classification/schemas.py
+  s_5eb0ecc5fc49dd::t_2999174f22fb81 1,11-14,25-26,29-32
+src/llm/prompts.py
+  s_2145a30ec4f74e::t_1bd1fd28ccf36a 503,514
+  s_2145a30ec4f74e::t_a966b187ab0532 203-226
+  s_2145a30ec4f74e::t_69ddd6fad105d2 64-65
+  s_5eb0ecc5fc49dd::t_9a7e120eb690b9 11,13-14,18,33-63,72-73,75,77,80,84,87,103-120,123-125,132-133,140-145,163-164,166,192-196
+  s_2145a30ec4f74e::t_67425717346c72 171-173
+  s_5eb0ecc5fc49dd::t_ee04ba45664351 3-4
+  s_5eb0ecc5fc49dd::t_af72558f59f475 501-502,504-505,510-513,531,533
+config/watched_channels.yaml
+  s_b39d1450b9ea5a::t_68ddb2d6cdba96 61-80
+src/market_inference/constants.py
+  s_5eb0ecc5fc49dd::t_228cf6d7e29ce9 6-11,20-26,34-42
+src/ingestion/schemas.py
+  s_2145a30ec4f74e::t_0c30e39f73fb76 79
+src/market_inference/router.py
+  s_5eb0ecc5fc49dd::t_8eb2f6735d1b4b 12-16,174
+  s_5eb0ecc5fc49dd::t_0ff21c56ce2c48 4,30,52-54,134,172
+tests/ingestion/test_llm_pipeline_helpers.py
+  s_b39d1450b9ea5a::t_03006f08ed6723 163-166
+  s_b39d1450b9ea5a::t_37bc9920aa0a63 3-4,10-11,135-162,167-187
+  s_5eb0ecc5fc49dd::t_fc14921669f8bf 7-8,234-309
+  s_b39d1450b9ea5a::t_fa040454cb3c22 188-189
+config/inference_weights.yaml
+  s_5eb0ecc5fc49dd::t_f1bd450bf042a5 46
+src/ingestion/service.py
+  s_b39d1450b9ea5a::t_1901211ed82a04 1637-1641,1915-1916
+  s_5eb0ecc5fc49dd::t_6db2c25b95bf99 388-399
+  s_2145a30ec4f74e::t_e5eddd33535247 740
+  s_2145a30ec4f74e::t_bbbf2bb3cf0f8c 704-706,709-712
+  s_5eb0ecc5fc49dd::t_d34eedfd59bbfd 703,708,713-716,741,773,801,822,840
+  s_2145a30ec4f74e::t_dd4dbefcc85558 853-871
+  s_2145a30ec4f74e::t_35ca69032011ba 823-825
+  s_b39d1450b9ea5a::t_68ddb2d6cdba96 951-952,962,977
+  s_5eb0ecc5fc49dd::t_182d0e4c1187ae 108-120,148,150,152,154-155,157-158,160-182
+  s_2145a30ec4f74e::t_81ca05ca2b46db 185-223
+  s_2145a30ec4f74e::t_f2e8383081236c 779-785
+  s_2145a30ec4f74e::t_5b7c8f1f5197f7 802-804
+  s_2145a30ec4f74e::t_c736e24a779e24 183-184
+src/llm/service.py
+  s_5eb0ecc5fc49dd::t_ba9299ad75e6d4 408-414,425-435,440,443-448,455-457,478,490-491
+  s_5eb0ecc5fc49dd::t_6475b8abaa494b 19
+  s_5eb0ecc5fc49dd::t_111f8ee07154f9 115
+  s_5eb0ecc5fc49dd::t_53f4cc83b3ee50 415-424,436-439,441-442,480-481
+  s_5eb0ecc5fc49dd::t_090caaff652a13 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "adddaa2b23587ffab82bedb4a5643f36f6276938",
+  "prompts": {},
+  "sessions": {
+    "s_2145a30ec4f74e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "14063e32-8a02-4e9c-bd6f-4b1a4eede615",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    },
+    "s_5eb0ecc5fc49dd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3f9f-9e9f-7bd1-8236-a71a3305f35a",
+        "model": "gpt-5.5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    },
+    "s_b39d1450b9ea5a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019e3f79-11b0-7012-a5d2-80f3b71ac257",
+        "model": "gpt-5.5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
