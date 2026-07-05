@@ -52,32 +52,32 @@ channels:
   - handle: "@yatirim101"
     name: "Yatırım 101"
     video_count: 4
-  - handle: "@EmreŞİRİNileBorsaveFinans"
-    name: "Emre Şirin"
-    video_count: 4
-  - handle: "@boraozkentlenasdaq"
-    name: "Bora Özkent"
-    video_count: 4
-  - handle: "@ThePlainBagel"
-    name: "The Plain Bagel"
-    video_count: 4
-    transcript_languages: ["en"]
-  - handle: "@WhiteBoardFinance"
-    name: "WhiteBoard Finance"
-    video_count: 4
-    transcript_languages: ["en"]
-  - handle: "@TheSwedishInvestor"
-    name: "The Swedish Investor"
-    video_count: 4
-    transcript_languages: ["en"]
-  - handle: "@PBoyle"
-    name: "Patrick Boyle"
-    video_count: 4
-    transcript_languages: ["en"]
-  - handle: "@MoneyGuyShow"
-    name: "The Money Guy Show"
-    video_count: 4
-    transcript_languages: ["en"]
+ #- handle: "@EmreŞİRİNileBorsaveFinans"
+ #  name: "Emre Şirin"
+ #  video_count: 4
+ #- handle: "@boraozkentlenasdaq"
+ #  name: "Bora Özkent"
+ #  video_count: 4
+ #- handle: "@ThePlainBagel"
+ #  name: "The Plain Bagel"
+ #  video_count: 4
+ #  transcript_languages: ["en"]
+ #- handle: "@WhiteBoardFinance"
+ #  name: "WhiteBoard Finance"
+ #  video_count: 4
+ #  transcript_languages: ["en"]
+ #- handle: "@TheSwedishInvestor"
+ #  name: "The Swedish Investor"
+ #  video_count: 4
+ #  transcript_languages: ["en"]
+ #- handle: "@PBoyle"
+ #  name: "Patrick Boyle"
+ #  video_count: 4
+ #  transcript_languages: ["en"]
+ #- handle: "@MoneyGuyShow"
+ #  name: "The Money Guy Show"
+ #  video_count: 4
+ #  transcript_languages: ["en"]
 
 
 # Example entries:
