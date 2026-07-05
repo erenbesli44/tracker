@@ -76,7 +76,7 @@ class IngestionYoutubeChannelRunRequest(CustomModel):
 
 
 class IngestionActionResponse(CustomModel):
-    person: Literal["created", "reused", "skipped"]
+    person: Literal["created", "reused", "skipped", "detected"]
     channel: Literal["created", "reused"]
     video: Literal["created", "reused"]
     transcript: Literal["created", "updated", "skipped"]
