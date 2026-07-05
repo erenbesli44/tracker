@@ -105,6 +105,19 @@ _SUBTOPIC_TO_TOPIC_SLUG = {
     "crypto": "kripto-paralar",
     "bitcoin": "kripto-paralar",
     "btc": "kripto-paralar",
+    "altin-gr": "altin",
+    "gram-altin": "altin",
+    "gram_altin": "altin",
+    "usd-try": "doviz-kur",
+    "dolar-tl": "doviz-kur",
+    "bist-100": "bist-turk-piyasalari",
+    "bist100": "bist-turk-piyasalari",
+    "nasdaq-100": "amerikan-piyasalari",
+    "nasdaq100": "amerikan-piyasalari",
+    "s&p-500": "amerikan-piyasalari",
+    "sp-500": "amerikan-piyasalari",
+    "brent-petrol": "petrol-enerji",
+    "brent_petrol": "petrol-enerji",
     "foreign_policy": "jeopolitik",
     "domestic_politics": "ic-siyaset",
     "geopolitics": "jeopolitik",
@@ -132,11 +145,82 @@ _MAIN_TOPIC_TO_TOPIC_SLUG = {
 }
 _STANCE_TO_SENTIMENT = {
     "positive": "bullish",
+    "pozitif": "bullish",
     "negative": "bearish",
+    "negatif": "bearish",
     "cautious": "neutral",
+    "temkinli": "neutral",
     "neutral": "neutral",
+    "nötr": "neutral",
+    "notr": "neutral",
     "mixed": "neutral",
+    "karisik": "neutral",
+    "karışık": "neutral",
 }
+_NO_VIEW_STANCES = {
+    "",
+    "unknown",
+    "unclear",
+    "no_view",
+    "not_enough_info",
+    "insufficient",
+    "belirsiz",
+    "kanı_yok",
+    "kani_yok",
+}
+_CONTEXT_TOPIC_SLUGS = {"jeopolitik", "ic-siyaset"}
+
+
+def _stance_to_sentiment(stance: str, topic_slug: str) -> str:
+    normalized = _safe_str(stance).lower()
+    if topic_slug in _CONTEXT_TOPIC_SLUGS:
+        if normalized in {"positive", "pozitif"}:
+            return "positive"
+        if normalized in {"negative", "negatif"}:
+            return "negative"
+        return "neutral"
+    return _STANCE_TO_SENTIMENT.get(normalized, "neutral")
+
+
+# ── Signal-based sentiment ──────────────────────────────────────────────────
+# Each topic_segment emits bullish_signal / bearish_signal (0-1) + view_type.
+# Neutral is a DELIBERATE call, never a dumping bucket: it requires either an
+# explicit range_bound view or a genuinely balanced two-sided view where both
+# sides are material. Thin / low-conviction content is dropped, not neutralized.
+SENTIMENT_NEUTRAL_BAND = 0.05  # |bull - bear| <= band => balanced (only above the floor)
+SENTIMENT_SIGNAL_FLOOR = 0.30  # max(bull, bear) below this and not range_bound => no real view
+
+
+def _optional_signal(value: object) -> float | None:
+    """Parse a 0-1 signal score; return None when absent/blank (distinct from an explicit 0.0)."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return max(0.0, min(1.0, float(value)))
+    if isinstance(value, str) and value.strip():
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except ValueError:
+            return None
+    return None
+
+
+def _sentiment_from_signals(
+    bull: float, bear: float, view_type: str, topic_slug: str
+) -> str | None:
+    """Derive stored sentiment from bullish/bearish scores, or None => exclude (no real view)."""
+    view = _safe_str(view_type).lower()
+    is_context = topic_slug in _CONTEXT_TOPIC_SLUGS
+    if view == "range_bound":
+        return "neutral"  # deliberate flat call
+    if max(bull, bear) < SENTIMENT_SIGNAL_FLOOR:
+        return None  # thin / no conviction -> drop instead of dumping into neutral
+    net = bull - bear
+    if abs(net) <= SENTIMENT_NEUTRAL_BAND:
+        return "neutral"  # both sides material and balanced
+    if net > 0:
+        return "positive" if is_context else "bullish"
+    return "negative" if is_context else "bearish"
 
 
 def _llm_generation_enabled() -> bool:
@@ -299,6 +383,18 @@ def _safe_float(value: object, default: float = 0.5) -> float:
     except (TypeError, ValueError):
         return default
     return max(0.0, min(1.0, parsed))
+
+
+def _safe_optional_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "evet"}:
+            return True
+        if normalized in {"false", "0", "no", "hayir", "hayır"}:
+            return False
+    return None
 
 
 def _clip_text(value: str, limit: int = 500) -> str:
@@ -604,7 +700,20 @@ def _classification_from_llm_payload(
         end_time: str,
         stance: str,
         confidence: float,
+        has_speaker_view: bool | None = None,
+        bullish_signal: float | None = None,
+        bearish_signal: float | None = None,
+        view_type: str = "",
     ) -> None:
+        normalized_stance = _safe_str(stance).lower()
+        if has_speaker_view is False:
+            return
+        # `stance` is legacy; only drop on it when it is present AND a no-view marker.
+        if normalized_stance and normalized_stance in _NO_VIEW_STANCES:
+            return
+        if confidence < 0.4:
+            return
+
         topic_slug = _resolve_topic_slug_from_llm(
             subtopic=subtopic,
             topic=topic,
@@ -628,6 +737,8 @@ def _classification_from_llm_payload(
                 "end_seconds": [],
                 "stances": [],
                 "confidences": [],
+                "signals": [],
+                "topic_slug": topic_slug,
             }
             grouped[topic_model.id] = topic_payload
 
@@ -659,11 +770,18 @@ def _classification_from_llm_payload(
 
         stances = topic_payload["stances"]
         if isinstance(stances, list):
-            stances.append(_safe_str(stance).lower() or "neutral")
+            stances.append(normalized_stance or "neutral")
 
         confidences = topic_payload["confidences"]
         if isinstance(confidences, list):
             confidences.append(confidence)
+
+        if bullish_signal is not None and bearish_signal is not None:
+            segment_signals = topic_payload["signals"]
+            if isinstance(segment_signals, list):
+                segment_signals.append(
+                    (bullish_signal, bearish_signal, _safe_str(view_type).lower(), confidence)
+                )
 
     topic_segments = payload.get("topic_segments")
     if isinstance(topic_segments, list):
@@ -680,6 +798,10 @@ def _classification_from_llm_payload(
                 end_time=_safe_str(item.get("end_time")),
                 stance=_safe_str(item.get("stance")),
                 confidence=_safe_float(item.get("confidence"), 0.6),
+                has_speaker_view=_safe_optional_bool(item.get("has_speaker_view")),
+                bullish_signal=_optional_signal(item.get("bullish_signal")),
+                bearish_signal=_optional_signal(item.get("bearish_signal")),
+                view_type=_safe_str(item.get("view_type")),
             )
 
     timeline_records = payload.get("timeline_records")
@@ -697,6 +819,10 @@ def _classification_from_llm_payload(
                 end_time=_safe_str(item.get("end_time")),
                 stance=_safe_str(item.get("stance")),
                 confidence=_safe_float(item.get("confidence"), 0.6),
+                has_speaker_view=_safe_optional_bool(item.get("has_speaker_view")),
+                bullish_signal=_optional_signal(item.get("bullish_signal")),
+                bearish_signal=_optional_signal(item.get("bearish_signal")),
+                view_type=_safe_str(item.get("view_type")),
             )
 
     if not grouped:
@@ -711,6 +837,7 @@ def _classification_from_llm_payload(
         end_seconds = values.get("end_seconds")
         stances = values.get("stances")
         confidences = values.get("confidences")
+        topic_slug = str(values.get("topic_slug") or "")
         if not isinstance(summaries, list) or not summaries:
             mention_text = "Video içeriğinde bu konuya dair değerlendirme yapıldı."
         else:
@@ -723,10 +850,25 @@ def _classification_from_llm_payload(
                     break
             mention_text = " ".join(merged).strip()
 
-        dominant_stance = "neutral"
-        if isinstance(stances, list) and stances:
-            dominant_stance = _safe_str(stances[0], "neutral")
-        sentiment = _STANCE_TO_SENTIMENT.get(dominant_stance, "neutral")
+        signals = values.get("signals")
+        if isinstance(signals, list) and signals:
+            # Dominant segment = strongest conviction (confidence * peak signal); avoids a
+            # single high-conviction call being diluted by mild restatements.
+            dom = max(signals, key=lambda s: (s[3] or 0.6) * max(s[0], s[1]))
+            sentiment = _sentiment_from_signals(dom[0], dom[1], dom[2], topic_slug)
+            if sentiment is None:
+                # No real directional view -> exclude rather than dump into neutral.
+                continue
+        else:
+            # Backward-compat: payloads without signal scores use the legacy stance mapping.
+            dominant_stance = "neutral"
+            if isinstance(stances, list) and stances:
+                dominant_stance = _safe_str(stances[0], "neutral")
+            sentiment = _stance_to_sentiment(dominant_stance, topic_slug)
+            logger.info(
+                "classification: topic %s had no signal scores; used legacy stance mapping",
+                topic_slug,
+            )
 
         avg_confidence = 0.6
         if isinstance(confidences, list) and confidences:
@@ -806,6 +948,8 @@ def _auto_fill_missing_analytics_for_new_video(
         )
         return
 
+    output_language = settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"
+
     try:
         llm_payload = llm_service.generate_analysis_json(
             source_platform=llm_meta["source_platform"],
@@ -815,7 +959,7 @@ def _auto_fill_missing_analytics_for_new_video(
             published_at=llm_meta["published_at"],
             source_url=llm_meta["source_url"],
             transcript=llm_transcript,
-            output_language=transcript_language,
+            output_language=output_language,
             channel_primary_topic=llm_meta["channel_primary_topic"],
         )
         logger.info("LLM analysis generated for video_url=%s", llm_meta["source_url"])
@@ -830,7 +974,7 @@ def _auto_fill_missing_analytics_for_new_video(
     if needs_summary:
         data.summary = _summary_from_llm_payload(
             llm_payload,
-            transcript_language=transcript_language,
+            transcript_language=output_language,
         )
 
     if needs_classification:
@@ -1490,7 +1634,11 @@ def _ingest_youtube_pipeline(
         data.video.title
         or (video_metadata.get("title") if video_metadata else None)
     )
-    person_id, person_action = _resolve_person_from_title(session, video_title, channel.channel_handle)
+    person_id, person_action = _resolve_person_from_title(
+        session,
+        video_title,
+        channel.channel_handle,
+    )
 
     video, video_action = _resolve_video(
         session,
@@ -1764,7 +1912,8 @@ def ingest_youtube_channel(
 
     if not playlist_info.candidates:
         logger.warning(
-            "No video candidates returned for channel_id=%s (yt-dlp may be blocked or channel has no public videos)",
+            "No video candidates returned for channel_id=%s "
+            "(yt-dlp may be blocked or channel has no public videos)",
             channel_id,
         )
 

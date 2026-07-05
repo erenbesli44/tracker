@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlmodel import Session, select
@@ -9,7 +9,11 @@ from sqlmodel import Session, select
 from src import cache
 from src.channels.models import YouTubeChannel
 from src.database import SessionDep, engine
-from src.market_inference.constants import INFERENCE_TOPIC_LABELS, INFERENCE_TOPIC_MAP
+from src.market_inference.constants import (
+    INFERENCE_TOPIC_ALIASES,
+    INFERENCE_TOPIC_LABELS,
+    INFERENCE_TOPIC_MAP,
+)
 from src.market_inference.models import (
     MarketInferenceRun,
     MarketInferenceSource,
@@ -22,8 +26,8 @@ from src.market_inference.schemas import (
     InferenceTopicHistory,
     InferenceTopicOut,
 )
-from src.videos.models import Video
 from src.persons.models import Person
+from src.videos.models import Video
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/inference", tags=["market-inference"])
@@ -45,7 +49,9 @@ def _build_topic_out(
     source_outs: list[InferenceSourceOut] = []
     for src in sources:
         video = session.get(Video, src.video_id)
-        channel = session.get(YouTubeChannel, video.channel_id) if video and video.channel_id else None
+        channel = (
+            session.get(YouTubeChannel, video.channel_id) if video and video.channel_id else None
+        )
         person = session.get(Person, video.person_id) if video and video.person_id else None
         source_outs.append(
             InferenceSourceOut(
@@ -125,7 +131,7 @@ def get_latest_inference(session: SessionDep) -> InferenceRunOut:
 )
 def list_runs(
     session: SessionDep,
-    limit: int = Query(default=30, ge=1, le=365),
+    limit: Annotated[int, Query(ge=1, le=365)] = 30,
 ) -> list[InferenceRunSummary]:
     runs = session.exec(
         select(MarketInferenceRun)
@@ -163,8 +169,9 @@ def get_run(run_id: int, session: SessionDep) -> InferenceRunOut:
 def get_topic_history(
     topic_key: str,
     session: SessionDep,
-    days: int = Query(default=30, ge=1, le=365),
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
 ) -> list[InferenceTopicHistory]:
+    topic_key = INFERENCE_TOPIC_ALIASES.get(topic_key, topic_key)
     if topic_key not in INFERENCE_TOPIC_MAP:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
