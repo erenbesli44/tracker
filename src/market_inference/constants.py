@@ -3,12 +3,13 @@
 # inference_key → list of topic.slug values in the DB
 INFERENCE_TOPIC_MAP: dict[str, list[str]] = {
     "bitcoin": ["kripto-paralar"],
-    "dolar-tl": ["doviz-kur"],
-    "bist": ["bist-turk-piyasalari"],
-    "us-markets": ["amerikan-piyasalari"],
-    "altin": ["altin"],
+    "altin-gr": ["altin"],
+    "usd-try": ["doviz-kur"],
+    "bist-100": ["bist-turk-piyasalari"],
+    "nasdaq-100": ["amerikan-piyasalari"],
+    "sp-500": ["amerikan-piyasalari"],
+    "brent-petrol": ["petrol-enerji"],
     "gumus": ["gumus"],
-    "petrol-enerji": ["petrol-enerji"],
     "faiz": ["faiz-para-politikasi"],
     "enflasyon": ["enflasyon"],
     "jeopolitik": ["jeopolitik"],
@@ -16,19 +17,28 @@ INFERENCE_TOPIC_MAP: dict[str, list[str]] = {
 }
 
 INFERENCE_TOPIC_LABELS: dict[str, str] = {
-    "bitcoin": "Bitcoin / Kripto",
-    "dolar-tl": "Dolar/TL Kuru",
-    "bist": "BIST / Türk Borsası",
-    "us-markets": "Amerikan Borsaları",
-    "altin": "Altın",
+    "bitcoin": "Bitcoin",
+    "altin-gr": "Altın gr",
+    "usd-try": "USD/TRY",
+    "bist-100": "BIST 100",
+    "nasdaq-100": "NASDAQ 100",
+    "sp-500": "S&P 500",
+    "brent-petrol": "Brent petrol",
     "gumus": "Gümüş",
-    "petrol-enerji": "Petrol & Enerji",
     "faiz": "Faiz / Para Politikası",
     "enflasyon": "Enflasyon",
     "jeopolitik": "Jeopolitik",
     "ic-siyaset": "İç Siyaset",
 }
 
-VALID_DIRECTIONS = {"up", "down", "sideways", "mixed"}
+INFERENCE_TOPIC_ALIASES: dict[str, str] = {
+    "altin": "altin-gr",
+    "dolar-tl": "usd-try",
+    "bist": "bist-100",
+    "us-markets": "sp-500",
+    "petrol-enerji": "brent-petrol",
+}
+
+VALID_DIRECTIONS = {"up", "down", "sideways", "mixed", "positive", "negative", "neutral"}
 MIN_CONFIDENCE_THRESHOLD = 0.4   # TopicMention.confidence filter
 TOP_K_SOURCES = 8                 # max sources sent to LLM per topic
