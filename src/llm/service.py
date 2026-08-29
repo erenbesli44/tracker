@@ -8,8 +8,6 @@ from typing import Any
 import openai
 
 from src.config import settings
-
-logger = logging.getLogger(__name__)
 from src.llm.prompts import (
     ANALYSIS_PROMPT_TEMPLATE,
     CLASSIFICATION_PROMPT_TEMPLATE,
@@ -17,6 +15,8 @@ from src.llm.prompts import (
     MARKET_INFERENCE_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
 )
+
+logger = logging.getLogger(__name__)
 
 _RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
 _RETRYABLE_ERROR_PHRASES = (
@@ -112,7 +112,7 @@ def _extract_json_payload(raw_text: str) -> dict[str, Any]:
         # Fallback: extract the first balanced JSON object when model adds wrapper text.
         json_str = _find_balanced_json_object(candidate)
         if json_str is None:
-            raise LLMGenerationError("LLM output is not valid JSON.")
+            raise LLMGenerationError("LLM output is not valid JSON.") from None
         try:
             parsed = json.loads(json_str)
         except json.JSONDecodeError as exc:
@@ -405,15 +405,58 @@ def generate_market_inference_json(
             "MiniMax is not configured (MINIMAX_BASE_URL / MINIMAX_API_KEY missing)."
         )
 
+    contextual_topics = {"jeopolitik", "ic-siyaset"}
+    if topic_key in contextual_topics:
+        direction_mode = (
+            "Bu konu piyasa varlığı değildir. direction alanı yükseliş/düşüş değil, "
+            "konuşmacıların jeopolitik/siyasi görünümü nasıl sınıflandırdığını belirtir."
+        )
+        direction_rules = (
+            "- Net iyileşme, normalleşme, risk azalması veya destekleyici etki "
+            "→ direction=positive, confidence 0.65-0.95\n"
+            "- Net bozulma, gerilim, kriz, yaptırım, savaş veya risk artışı "
+            "→ direction=negative, confidence 0.65-0.95\n"
+            "- Birbirine yakın olumlu ve olumsuz sinyaller → direction=mixed, "
+            "confidence 0.50-0.75\n"
+            "- Net sınıflandırma yok ama konuya dair açıklayıcı içgörü var "
+            "→ direction=neutral, confidence 0.50-0.70\n"
+            "- confidence < 0.50 ile positive veya negative GEÇERSİZDİR; "
+            "mixed veya neutral kullan."
+        )
+        direction_schema = "positive|negative|neutral|mixed"
+        valid_directions = {"positive", "negative", "neutral", "mixed"}
+        directional_directions = {"positive", "negative"}
+        fallback_direction = "mixed"
+    else:
+        direction_mode = (
+            "Bu konu takip edilen bir piyasa varlığıdır. direction alanı konuşmacıların "
+            "beklediği fiyat/yön görünümünü belirtir."
+        )
+        direction_rules = (
+            "- Kaynaklarda net konsensüs (pek çok kaynak aynı yön) "
+            "→ direction=up|down, confidence 0.75-0.95\n"
+            "- Karışık sinyal ama hafif ağırlık farkı → direction=mixed, "
+            "confidence 0.50-0.70\n"
+            "- Yön yok ama tutarlı yatay beklenti → direction=sideways, confidence 0.70+\n"
+            "- confidence < 0.50 ile direction=up veya direction=down GEÇERSİZDİR; "
+            "mixed veya sideways kullan."
+        )
+        direction_schema = "up|down|sideways|mixed"
+        valid_directions = {"up", "down", "sideways", "mixed"}
+        directional_directions = {"up", "down"}
+        fallback_direction = "mixed"
+
     prompt = (
         MARKET_INFERENCE_PROMPT_TEMPLATE
         .replace("{{topic_key}}", topic_key)
         .replace("{{topic_label}}", topic_label)
         .replace("{{sources_block}}", sources_block)
         .replace("{{prev_section}}", prev_section)
+        .replace("{{direction_mode}}", direction_mode)
+        .replace("{{direction_rules}}", direction_rules)
+        .replace("{{direction_schema}}", direction_schema)
     )
 
-    _VALID_DIRECTIONS = {"up", "down", "sideways", "mixed"}
     _MAX_ATTEMPTS = 3
 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -432,9 +475,10 @@ def generate_market_inference_json(
         confidence = float(payload.get("confidence", 0.0))
 
         # Validate: confidence<0.5 + directional is invalid
-        if direction in ("up", "down") and confidence < 0.5:
+        if direction in directional_directions and confidence < 0.5:
             logger.warning(
-                "Inference validation failed topic=%s direction=%s confidence=%.2f (attempt %d), retrying",
+                "Inference validation failed topic=%s direction=%s confidence=%.2f "
+                "(attempt %d), retrying",
                 topic_key,
                 direction,
                 confidence,
@@ -443,8 +487,8 @@ def generate_market_inference_json(
             if attempt < _MAX_ATTEMPTS:
                 continue
 
-        if direction not in _VALID_DIRECTIONS:
-            payload["direction"] = "mixed"
+        if direction not in valid_directions:
+            payload["direction"] = fallback_direction
 
         return payload
 

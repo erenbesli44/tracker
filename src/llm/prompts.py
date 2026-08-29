@@ -1,19 +1,21 @@
 """Prompt templates for transcript summarization and topic classification."""
 
+# ruff: noqa: E501
+
 # ---------------------------------------------------------------------------
 # Merged prompt: summary + classification in a single LLM call.
 # Only requests the fields that downstream parsers actually consume.
 # ---------------------------------------------------------------------------
 
 ANALYSIS_PROMPT_TEMPLATE = """\
-You are a content analyst for a Turkish-language media tracking platform.
+You are a deterministic transcript analysis engine for a Turkish-language media tracking platform.
 
-Analyze the transcript below and return a single JSON object with summary + topic classification.
-Base analysis ONLY on transcript content. Return valid JSON only — no markdown, no explanation.
+Analyze the transcript below and return exactly one JSON object with summary + topic classification.
+Base every field ONLY on explicit transcript content. Return valid JSON only; no markdown, no explanation.
 All free-text fields must be in {{output_language}}.
 Transcript may include time markers like [MM:SS-MM:SS]; use them to separate topic regions.
 Some videos open with a short teaser/fragman (a preview montage of what will be discussed).
-Ignore that opening fragment — do not classify or summarize it. Analyze only the substantive content.
+Ignore that opening fragment completely; analyze only substantive discussion.
 
 SENTENCE-COMPLETENESS RULE (applies to EVERY free-text summary field in this
 schema — `summary.short`, `summary.detailed`, and every `topic_segments[*].summary`):
@@ -28,31 +30,61 @@ CHANNEL CONTEXT
 Channel: {{channel_name}}
 Channel Primary Focus: {{channel_primary_topic}}
 
-This channel typically covers {{channel_primary_topic}}. Include every subtopic
-with confidence >= 0.40.
+This channel typically covers {{channel_primary_topic}}. Channel context is only a weak prior.
+Never include an item only because the channel usually covers it.
+
+══════════════════════════════════════════════════════════════
+TRACKED ITEMS
+══════════════════════════════════════════════════════════════
+The product surface tracks these items. Prefer these exact item labels in summaries
+and `tracked_item` when the transcript contains an explicit speaker view:
+
+1. Bitcoin
+2. Altın gr
+3. USD/TRY
+4. BIST 100
+5. NASDAQ 100
+6. S&P 500
+7. Brent petrol
+8. Gümüş
+
+Also continue extracting meaningful non-asset insights for:
+- jeopolitik
+- ic-siyaset
+- faiz-para-politikasi
+- enflasyon
+
+Tracked asset goal:
+For each tracked asset, identify the speaker's main idea, expectation, and outlook.
+If the speaker does not express a clear opinion, expectation, risk view, or scenario
+for that exact item, do NOT include that item in `topic_segments`.
+
+Context topic goal:
+For jeopolitik and ic-siyaset, extract the speaker's substantive insight even when
+there is no market direction. Score bullish_signal (de-escalation/stabilizing/supportive)
+and bearish_signal (escalation/destabilizing/risk-increasing) as described below.
 
 ══════════════════════════════════════════════════════════════
 TOPIC TAXONOMY (use these canonical slugs only)
 ══════════════════════════════════════════════════════════════
 Main topics: ekonomi, siyaset, spor, teknoloji
 
-Economy/finance subtopics — assign one of these when the transcript discusses
-any of the terms listed after the colon (these are coverage hints, not an
-exhaustive list; the slug applies to the whole topic area):
+Economy/finance subtopics — use these canonical slugs. The terms after the colon
+are matching hints, not an exhaustive list:
 
-  bist-turk-piyasalari  : BIST, Borsa İstanbul, XU100, XU030, BIST 50, hisse senedi,
+  bist-turk-piyasalari  : BIST 100, BIST, Borsa İstanbul, XU100, XU030, BIST 50, hisse senedi,
                           endeks, banka/sanayi hisseleri, yerli piyasa, yerli borsa
-  altin                 : ons altın, gram altın, çeyrek/yarım/tam/cumhuriyet altını,
+  altin                 : gram altın, Altın gr, ons altın, çeyrek/yarım/tam/cumhuriyet altını,
                           gold, XAU, altın fiyatı, altın yatırımı
   gumus                 : ons gümüş, silver, XAG, gümüş yatırımı
-  doviz-kur             : USD/TRY, EUR/TRY, GBP/TRY, EUR/USD, DXY, dolar, euro,
+  doviz-kur             : USD/TRY, Dolar/TL, EUR/TRY, GBP/TRY, EUR/USD, DXY, dolar, euro,
                           sterlin, döviz, kur, parite, döviz kuru
   kripto-paralar        : Bitcoin, BTC, Ethereum, ETH, altcoin, stablecoin, USDT,
                           kripto, kripto para, kripto borsası, Binance, Coinbase
-  amerikan-piyasalari   : Dow Jones, S&P 500, Nasdaq, Wall Street, ABD borsaları,
+  amerikan-piyasalari   : NASDAQ 100, Nasdaq, S&P 500, Dow Jones, Wall Street, ABD borsaları,
                           US futures, Magnificent 7, Amerikan endeksleri, Tesla/Apple/
                           Nvidia gibi ABD hisseleri
-  petrol-enerji         : Brent, WTI, ham petrol, petrol, doğalgaz, LNG, OPEC,
+  petrol-enerji         : Brent petrol, Brent, WTI, ham petrol, petrol, doğalgaz, LNG, OPEC,
                           OPEC+, rafineri, enerji fiyatları, benzin, motorin
   faiz-para-politikasi  : TCMB/Fed/ECB/BoJ/BoE faizi, politika faizi, mevduat
                           faizi, repo, tahvil faizi, para politikası, FOMC, PPK
@@ -68,42 +100,48 @@ Politics subtopics:
 ══════════════════════════════════════════════════════════════
 CLASSIFICATION RULES (strict)
 ══════════════════════════════════════════════════════════════
-1. MATCH BROADLY: assign a subtopic whenever the transcript discusses ANY of
-   the terms listed in that subtopic's coverage hint above. Do not require an
-   exact slug-name match. Example: if the speaker discusses Nasdaq or Wall
-   Street, use `amerikan-piyasalari`.
+1. INCLUDE ONLY CLEAR SPEAKER VIEWS:
+   Include a topic_segment only when the speaker expresses a clear idea, expectation,
+   warning, scenario, or judgement about the item/topic. Mere mentions, news reading,
+   ticker lists, comparisons without a conclusion, or examples without a view are excluded.
 
-2. CONFIDENCE THRESHOLDS:
-   - >= 0.70  : Strong match — the speaker clearly discusses this subtopic
-                with specific data, opinions, or analysis.
-   - 0.40-0.69: Moderate match — the subtopic is mentioned with some
-                substance but not the primary focus.
-   - 0.30-0.39: Weak match — brief mention or passing reference. Only
-                include when the subtopic is in the channel's expected list.
-   - < 0.30   : Do NOT include.
+2. TRACKED ASSET PRECISION:
+   For Bitcoin, Altın gr, USD/TRY, BIST 100, NASDAQ 100, S&P 500, Brent petrol,
+   and Gümüş, focus on the speaker's expectation and reasoning for that exact asset.
+   Do not generalize from "ABD borsaları" to NASDAQ 100 or S&P 500 unless the speaker
+   explicitly connects the view to that index or clearly discusses the index family.
 
-3. Use canonical subtopic slugs listed above. Do NOT invent new slugs and
+3. CONFIDENCE THRESHOLDS:
+   - >= 0.75  : Clear view with reasoning, levels, risks, or scenario.
+   - 0.55-0.74: Clear view but limited supporting detail.
+   - 0.40-0.54: Weak but still explicit view; include only if useful.
+   - < 0.40   : Do NOT include.
+
+4. Use canonical subtopic slugs listed above. Do NOT invent new slugs and
    do NOT use "other:*".
 
-4. Do NOT suppress a non-expected subtopic. If the transcript clearly
-   discusses a subtopic (confidence >= 0.40) include it, even if the
-   channel's expected list does not mention it.
-
-5. Capture EVERY numeric level the speaker names — price targets, support/
-   resistance, percentages, durations, index levels. Put them in `key_levels`
-   as short strings (e.g. "60 dolar", "%20", "3-6 ay", "4.700").
+5. Capture EVERY numeric level the speaker names for the included item — price
+   targets, support/resistance, percentages, durations, index levels. Put them
+   in `key_levels` as short strings (e.g. "60 dolar", "%20", "3-6 ay", "4.700").
 
 6. IGNORE TEASERS: Many videos start with a short fragman (teaser/preview montage of upcoming
    content). These are typically the first 30–90 seconds and consist of rapid, disjointed
    sentence fragments previewing later discussion. Do NOT create topic_segments from teaser
    content. Only classify substantive, developed discussion.
 
-7. Maximum 8 topic_segments per video. Prioritize by confidence descending.
+7. Maximum 8 topic_segments per video. Prioritize tracked assets first, then
+   jeopolitik/ic-siyaset/faiz/enflasyon insights, then other finance subtopics.
 
 8. start_time and end_time MUST be a single MM:SS or HH:MM:SS value (not a
    range with a dash). Use the first transcript marker where the topic is
    clearly introduced for start_time, and the last where it is still active
    for end_time.
+
+9. Determinism:
+   Do not infer hidden intent. Do not add external market knowledge. When two labels
+   are plausible, choose the more specific tracked item if explicitly named; otherwise
+   choose the canonical broader subtopic. Keep array ordering stable by confidence
+   descending, then first occurrence in transcript.
 
 ══════════════════════════════════════════════════════════════
 JSON SCHEMA
@@ -122,13 +160,17 @@ JSON SCHEMA
   "topic_segments": [
     {
       "subtopic": "canonical subtopic slug from taxonomy",
+      "tracked_item": "Bitcoin | Altın gr | USD/TRY | BIST 100 | NASDAQ 100 | S&P 500 | Brent petrol | Gümüş | jeopolitik | ic-siyaset | faiz-para-politikasi | enflasyon | null",
+      "has_speaker_view": true,
       "is_expected": true,
-      "summary": "3-5 sentence summary of what the speaker says",
+      "summary": "3-5 sentence summary of the speaker's main idea, expectation, reasoning, and risk view",
       "evidence": "short quote or paraphrase from transcript",
       "key_levels": ["every numeric level mentioned, as short strings"],
       "start_time": "MM:SS (single value, no range)",
       "end_time": "MM:SS (single value, no range)",
-      "stance": "positive | negative | cautious | neutral | mixed",
+      "bullish_signal": 0.00,
+      "bearish_signal": 0.00,
+      "view_type": "directional | range_bound | two_sided",
       "confidence": 0.0
     }
   ]
@@ -147,18 +189,41 @@ FIELD INSTRUCTIONS
 - primary_topic.confidence: how strongly the transcript matches this topic.
 - topic_segments: one entry per distinct subtopic discussed.
   - subtopic: use one canonical taxonomy slug only.
-  - is_expected: true if subtopic is in the channel's expected list, false otherwise.
-  - summary: 3-5 sentences capturing speaker's full opinion, reasoning, key
-    price levels, and outlook. Every sentence must be fully completed with
+  - tracked_item: exact tracked item label when applicable; otherwise null.
+  - has_speaker_view: true for every included item. If false, omit the item entirely.
+  - is_expected: true only when the item clearly matches the channel's usual focus.
+  - summary: 3-5 sentences capturing the speaker's main idea, expectation,
+    reasoning, key price levels, and risk/condition. Every sentence must be fully completed with
     terminal punctuation — never cut off mid-sentence. If you cannot finish a
     sentence, drop it entirely and end with the previous completed one.
   - key_levels: include EVERY price/target/support/resistance/percentage/
     duration mentioned. Short strings. Never empty when the speaker cites
     numbers for this topic.
   - start_time/end_time: SINGLE MM:SS value each, never a dash-separated range.
-  - stance: for finance: positive=bullish, negative=bearish, cautious=aware of
-    downside but not selling, neutral=no directional view, mixed=both sides.
-  - confidence: 0.0-1.0, be precise. Reflect actual depth of discussion.
+  - bullish_signal / bearish_signal: TWO INDEPENDENT scores, each 0.00-1.00 with TWO decimals.
+    Score the strength of the speaker's OWN case from their conviction + reasoning (NOT word count):
+      • bullish_signal: how strongly the speaker argues this item will RISE / do well.
+      • bearish_signal: how strongly the speaker argues this item will FALL / do badly.
+    Set a side to 0.00 only when that case is genuinely ABSENT (not merely weak). Score on a fine
+    grid (e.g. 0.35, 0.55, 0.80) — do not round both sides to the same coarse value out of laziness.
+    FINANCE REFERENCE FRAME (critical): score the PRICE DIRECTION OF THE tracked_item ITSELF, never
+    whether the situation is "good or bad" for the economy/investor:
+      • "TL eriyor, dolar uçuyor"        -> USD/TRY bullish_signal HIGH (the quote rises), NOT bearish.
+      • "Ekonomi kötü, altına/dolara kaçış" -> Altın gr / USD/TRY bullish_signal HIGH, despite the negative macro tone.
+    For jeopolitik / ic-siyaset (no price): bullish_signal = de-escalation / stabilizing / supportive,
+    bearish_signal = escalation / destabilizing / risk-increasing.
+    CAUTIOUS RULE: "temkinli", "ihtiyatlı", "kâr realizasyonu", "düzeltme gelebilir", "acele etmeyin",
+    "yukarısı sınırlı", "aşağı riskler var" are DOWNSIDE-LEANING — set bearish_signal at least 0.20 ABOVE
+    bullish_signal. Never score caution as symmetric (e.g. 0.30/0.30).
+  - view_type:
+      • "directional": the speaker leans up or down (the normal case).
+      • "range_bound": an EXPLICIT sideways / no-material-change call ("altın 4000-4200 bandında yatay kalır").
+        Use this — NOT two low scores — to express a deliberate flat view.
+      • "two_sided": a genuinely strong case BOTH ways (both signals high and comparable).
+    Do NOT use range_bound / two_sided to disguise uncertainty. If the speaker has no real view on the
+    item, set has_speaker_view=false and OMIT the item entirely — never emit a weak / no-view segment.
+  - confidence: 0.00-1.00 — YOUR certainty that you extracted the speaker's view correctly. This is
+    SEPARATE from signal magnitude (the speaker's conviction). Do not let one drive the other.
 
 INPUT METADATA:
 - source_platform: {{source_platform}}
@@ -433,14 +498,19 @@ CÜMLE TAMAMLANMA KURALI:
 `summary` ve her `contributions[*].note` alanı her zaman nokta, ünlem veya soru işaretiyle
 biten tam bir cümleyle bitmelidir. Cümleyi asla yarım bırakma; uzunsa son cümleyi at, kesme.
 
-YÖN VE GÜVEN BANTLARI:
-- Kaynaklarda net konsensüs (pek çok kaynak aynı yön) → direction=up|down, confidence 0.75-0.95
-- Karışık sinyal ama hafif ağırlık farkı → direction=mixed, confidence 0.50-0.70
-- Yön yok ama tutarlı yatay beklenti → direction=sideways, confidence 0.70+
-- confidence < 0.50 ile direction=up veya direction=down GEÇERSİZDİR; mixed veya sideways kullan.
+SINIFLANDIRMA MODU:
+{{direction_mode}}
+
+YÖN/SINIFLANDIRMA VE GÜVEN BANTLARI:
+{{direction_rules}}
 
 AĞIRLIK KURALI:
 [agirlik] değeri yüksek kaynaklar düşük ağırlıklı kaynakları eziyor; düşükler sadece güveni düşürebilir.
+
+ANA FİKİR KURALI:
+Her kaynak için önce konuşmacının ana fikrini, beklentisini, gerekçesini ve risk/koşul cümlesini anla.
+Kaynakta bu konu hakkında net bir konuşmacı kanısı yoksa o kaynağı katkıya dahil etme.
+Sadece haber aktarımı, listeleme veya örnek olarak geçen ifadeler çıkarımı belirlememeli.
 
 KONU
 ====
@@ -458,9 +528,9 @@ YENI GELEN KAYNAKLAR
 CIKTI JSON SEMASI
 =================
 {
-  "direction": "up|down|sideways|mixed",
+  "direction": "{{direction_schema}}",
   "confidence": 0.0,
-  "summary": "2-3 Türkçe tam cümle. Piyasa beklentisini net açıkla.",
+  "summary": "2-3 Türkçe tam cümle. Ana fikri, beklentiyi/sınıflandırmayı ve gerekçeyi net açıkla.",
   "tags": ["etiket1", "etiket2"],
   "changed_from_prev": false,
   "change_reason": null,

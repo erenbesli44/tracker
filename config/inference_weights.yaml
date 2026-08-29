@@ -43,7 +43,7 @@ rules:
 
   # ── İslam Memiş: high only for altın/gümüş ────────────────────────────────
   - channel: "islammemisaltin"
-    topics: ["altin", "gumus"]
+    topics: ["altin", "altin-gr", "gumus"]
     weight: 2.0
   - channel: "islammemisaltin"
     weight: 0.0
