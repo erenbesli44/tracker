@@ -1,0 +1,37 @@
+config/watched_channels.yaml
+  s_763ea42ec8a818::t_12bf8c9fa1af58 34-36
+src/channels/models.py
+  s_763ea42ec8a818::t_a746010318b235 29-32
+src/channels/router.py
+  s_763ea42ec8a818::t_43302d4c47fda3 1-3,24-28
+src/channels/schemas.py
+  s_763ea42ec8a818::t_3769afd4644874 33,48
+src/channels/service.py
+  s_763ea42ec8a818::t_52dcdf1462e4aa 92-96
+src/database.py
+  s_763ea42ec8a818::t_a9431c6d1c79cb 230-241,597-610
+src/market_inference/service.py
+  s_763ea42ec8a818::t_a7dccff1664358 93-95
+src/topics/service.py
+  s_763ea42ec8a818::t_5329f96f38e41c 140,142
+tests/channels/test_router.py
+  s_763ea42ec8a818::t_d01ad493a4a746 41-65
+tests/topics/test_router.py
+  s_763ea42ec8a818::t_6b7449156dff89 44-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d10551805110f4f2b6623549e197933bd59a1319",
+  "prompts": {},
+  "sessions": {
+    "s_763ea42ec8a818": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3cd22121-fef5-479b-b705-2e1e49e378d6",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
