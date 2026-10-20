@@ -1,4 +1,6 @@
-from fastapi import APIRouter, status
+from typing import Annotated
+
+from fastapi import APIRouter, Query, status
 
 from src.channels import service
 from src.channels.dependencies import ValidChannelDep
@@ -19,8 +21,11 @@ def create_channel(data: ChannelCreate, session: SessionDep) -> ChannelResponse:
 
 
 @router.get("/", response_model=list[ChannelResponse])
-def list_channels(session: SessionDep) -> list[ChannelResponse]:
-    return service.list_all(session)
+def list_channels(
+    session: SessionDep,
+    include_inactive: Annotated[bool, Query()] = False,
+) -> list[ChannelResponse]:
+    return service.list_all(session, include_inactive=include_inactive)
 
 
 @router.get("/{channel_id}", response_model=ChannelResponse)

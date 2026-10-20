@@ -91,6 +91,9 @@ def _collect_sources(
         .where(TopicMention.topic_id.in_(topic_ids))  # type: ignore[attr-defined]
         .where(TopicMention.confidence >= MIN_CONFIDENCE_THRESHOLD)
         .where(
+            (YouTubeChannel.id.is_(None)) | (YouTubeChannel.is_active.is_(True))  # type: ignore[attr-defined]
+        )
+        .where(
             # Use published_at when available, fall back to created_at
             (Video.published_at >= window_start) | (  # type: ignore[operator]
                 (Video.published_at.is_(None)) & (Video.created_at >= window_start)  # type: ignore[attr-defined]

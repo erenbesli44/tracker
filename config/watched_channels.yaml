@@ -31,9 +31,9 @@ channels:
   - handle: "@KanalFinans"
     name: "Tunç Şatıroğlu"
     video_count: 4
-  - handle: "@HaticeKolçak"
-    name: "Hatice Kolçak"
-    video_count: 4
+ #- handle: "@HaticeKolçak"
+ #  name: "Hatice Kolçak"
+ #  video_count: 4
   - handle: "@barissoydan"
     name: "Barış Soydan"
     video_count: 4

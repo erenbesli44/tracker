@@ -26,6 +26,10 @@ class YouTubeChannel(SQLModel, table=True):
     # same reasons as expected_subtopics — keeps SQLite and Postgres schemas
     # aligned without needing a JSONB column type.
     channel_metadata: Optional[str] = Field(default=None)
+    # Inactive channels are no longer watched and are hidden from public
+    # listings, topic opinions and market inference. Rows are kept so history
+    # can be restored by flipping the flag back.
+    is_active: bool = Field(default=True, index=True)
     legacy_person_id: Optional[int] = Field(
         default=None,
         foreign_key="person.id",

@@ -227,6 +227,18 @@ def _run_postgres_migrations(session: Session) -> None:
     session.exec(
         text("ALTER TABLE youtube_channel ADD COLUMN IF NOT EXISTS channel_metadata VARCHAR")
     )
+    session.exec(
+        text(
+            "ALTER TABLE youtube_channel ADD COLUMN IF NOT EXISTS is_active "
+            "BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+    )
+    session.exec(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_youtube_channel_is_active "
+            "ON youtube_channel(is_active)"
+        )
+    )
     session.exec(text("ALTER TABLE transcript ADD COLUMN IF NOT EXISTS segments_json VARCHAR"))
     session.exec(
         text(
@@ -582,6 +594,20 @@ def run_lightweight_migrations() -> None:
         return
 
     with Session(engine) as session:
+        if not _sqlite_has_column(session, "youtube_channel", "is_active"):
+            session.exec(
+                text(
+                    "ALTER TABLE youtube_channel ADD COLUMN is_active "
+                    "BOOLEAN NOT NULL DEFAULT 1"
+                )
+            )
+            session.exec(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_youtube_channel_is_active "
+                    "ON youtube_channel(is_active)"
+                )
+            )
+
         if not _sqlite_has_column(session, "video", "channel_id"):
             session.exec(text("ALTER TABLE video ADD COLUMN channel_id INTEGER"))
 

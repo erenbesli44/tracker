@@ -89,8 +89,11 @@ def get_by_legacy_person_id(session: Session, person_id: int) -> YouTubeChannel 
     ).first()
 
 
-def list_all(session: Session) -> list[YouTubeChannel]:
-    return list(session.exec(select(YouTubeChannel).order_by(YouTubeChannel.name)).all())
+def list_all(session: Session, *, include_inactive: bool = False) -> list[YouTubeChannel]:
+    stmt = select(YouTubeChannel)
+    if not include_inactive:
+        stmt = stmt.where(YouTubeChannel.is_active.is_(True))
+    return list(session.exec(stmt.order_by(YouTubeChannel.name)).all())
 
 
 def update(session: Session, channel: YouTubeChannel, data: ChannelUpdate) -> YouTubeChannel:

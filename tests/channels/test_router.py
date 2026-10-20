@@ -38,3 +38,28 @@ async def test_update_channel(client: AsyncClient):
     )
     assert update.status_code == 200
     assert update.json()["bio"] == "Makro yorumlar"
+
+
+async def test_inactive_channel_hidden_from_list_unless_requested(client: AsyncClient):
+    active = await client.post(
+        "/channels/", json={"name": "Aktif Kanal", "channel_handle": "@aktif"}
+    )
+    retired = await client.post(
+        "/channels/", json={"name": "Eski Kanal", "channel_handle": "@eski"}
+    )
+    assert active.json()["is_active"] is True
+
+    patched = await client.patch(f"/channels/{retired.json()['id']}", json={"is_active": False})
+    assert patched.status_code == 200
+    assert patched.json()["is_active"] is False
+
+    default_list = await client.get("/channels/")
+    assert [c["name"] for c in default_list.json()] == ["Aktif Kanal"]
+
+    full_list = await client.get("/channels/", params={"include_inactive": "true"})
+    assert sorted(c["name"] for c in full_list.json()) == ["Aktif Kanal", "Eski Kanal"]
+
+    # Direct lookup by id still works so the row can be reactivated later.
+    by_id = await client.get(f"/channels/{retired.json()['id']}")
+    assert by_id.status_code == 200
+    assert by_id.json()["is_active"] is False

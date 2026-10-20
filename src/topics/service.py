@@ -137,8 +137,9 @@ def get_topic_opinions_by_channel(
     count_stmt = (
         select(TopicMention.channel_id, func.count(TopicMention.id).label("cnt"))
         .join(Video, TopicMention.video_id == Video.id)
+        .join(YouTubeChannel, TopicMention.channel_id == YouTubeChannel.id)
         .where(TopicMention.topic_id == topic.id)
-        .where(TopicMention.channel_id.isnot(None))
+        .where(YouTubeChannel.is_active.is_(True))
     )
     if cutoff:
         count_stmt = count_stmt.where(TopicMention.created_at >= cutoff)

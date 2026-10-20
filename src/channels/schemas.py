@@ -30,6 +30,7 @@ class ChannelUpdate(CustomModel):
     primary_topic_slug: Optional[str] = Field(default=None, max_length=100)
     expected_subtopics: Optional[list[str]] = None
     channel_metadata: Optional[dict[str, Any]] = None
+    is_active: bool | None = None
 
 
 class ChannelResponse(CustomModel):
@@ -44,6 +45,7 @@ class ChannelResponse(CustomModel):
     primary_topic_slug: Optional[str]
     expected_subtopics: Optional[list[str]]
     channel_metadata: Optional[dict[str, Any]] = None
+    is_active: bool = True
     legacy_person_id: Optional[int]
     created_at: datetime
     updated_at: Optional[datetime]
