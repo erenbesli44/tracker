@@ -12,8 +12,12 @@ backfill script (scripts/backfill_outlook.py) picks it up later.
 """
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
@@ -190,3 +194,96 @@ def classify_video_safely(session: Session, video: Video) -> None:
     except Exception:  # noqa: BLE001 — ingestion must not fail on this step
         session.rollback()
         logger.warning("Outlook classification failed for video_id=%s", video.id, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Backfill (shared by scripts/backfill_outlook.py and POST /outlook/backfill)
+# ---------------------------------------------------------------------------
+
+
+
+def pending_video_ids(session: Session, limit: int, redo_all: bool = False) -> list[int]:
+    """Videos with at least one instrument mention not on the current prompt version."""
+    stmt = (
+        select(Video.id, func.max(Video.published_at))
+        .join(TopicMention, TopicMention.video_id == Video.id)
+        .join(Topic, TopicMention.topic_id == Topic.id)
+        .where(Topic.slug.in_(list(INSTRUMENTS)))
+    )
+    if not redo_all:
+        stmt = stmt.where(
+            (TopicMention.outlook_version.is_(None))
+            | (TopicMention.outlook_version != OUTLOOK_PROMPT_VERSION)
+        )
+    stmt = stmt.group_by(Video.id).order_by(
+        func.max(Video.published_at).desc().nulls_last(), Video.id.desc()
+    )
+    return [row[0] for row in session.exec(stmt.limit(limit)).all()]
+
+
+def coverage(session: Session) -> dict:
+    base = (
+        select(func.count(TopicMention.id))
+        .join(Topic, TopicMention.topic_id == Topic.id)
+        .where(Topic.slug.in_(list(INSTRUMENTS)))
+    )
+    total = session.exec(base).one()
+    on_version = TopicMention.outlook_version == OUTLOOK_PROMPT_VERSION
+    current = session.exec(base.where(on_version)).one()
+    explicit = session.exec(
+        base.where(on_version).where(TopicMention.outlook_explicit.is_(True))
+    ).one()
+    return {"instrument_mentions": total, "classified": current, "explicit": explicit}
+
+
+_state_lock = threading.Lock()
+_state: dict = {"running": False}
+
+
+def backfill_state() -> dict:
+    with _state_lock:
+        return dict(_state)
+
+
+def run_backfill(engine, *, limit: int, workers: int = 3) -> None:
+    """Classify up to `limit` pending videos with a small worker pool. Single-flight."""
+    with _state_lock:
+        if _state.get("running"):
+            return
+        _state.clear()
+        _state.update(
+            running=True,
+            started_at=datetime.now(UTC).isoformat(),
+            version=OUTLOOK_PROMPT_VERSION,
+            queued=0,
+            done=0,
+            failed=0,
+            last_error=None,
+        )
+    try:
+        with Session(engine) as session:
+            ids = pending_video_ids(session, limit)
+        with _state_lock:
+            _state["queued"] = len(ids)
+
+        def one(video_id: int) -> None:
+            with Session(engine) as session:
+                try:
+                    video = session.get(Video, video_id)
+                    if video is not None:
+                        classify_video(session, video)
+                    with _state_lock:
+                        _state["done"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    session.rollback()
+                    logger.warning("Outlook backfill failed video_id=%s", video_id, exc_info=True)
+                    with _state_lock:
+                        _state["failed"] += 1
+                        _state["last_error"] = f"video {video_id}: {str(exc)[:200]}"
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            list(pool.map(one, ids))
+    finally:
+        with _state_lock:
+            _state["running"] = False
+            _state["finished_at"] = datetime.now(UTC).isoformat()

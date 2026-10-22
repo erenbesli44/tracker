@@ -64,6 +64,7 @@ from src.topics.router import router as topics_router  # noqa: E402
 from src.channels.router import router as channels_router  # noqa: E402
 from src.videos.router import router as videos_router  # noqa: E402
 from src.classification.router import router as classification_router  # noqa: E402
+from src.classification.outlook_router import router as outlook_router  # noqa: E402
 from src.timeline.router import router as timeline_router  # noqa: E402
 from src.ingestion.router import router as ingestion_router  # noqa: E402
 from src.jobs.youtube_watch.router import router as youtube_watch_router  # noqa: E402
@@ -77,6 +78,7 @@ app.include_router(topics_router, dependencies=_protected)
 app.include_router(channels_router, dependencies=_protected)
 app.include_router(videos_router, dependencies=_protected)
 app.include_router(classification_router, dependencies=_protected)
+app.include_router(outlook_router, dependencies=_protected)
 app.include_router(timeline_router, dependencies=_protected)
 app.include_router(ingestion_router, dependencies=_protected)
 app.include_router(youtube_watch_router, dependencies=_protected)

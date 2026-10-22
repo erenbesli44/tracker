@@ -134,3 +134,33 @@ async def test_safe_hook_swallows_llm_errors(client: AsyncClient, session: Sessi
     assert all(m.outlook is None for m in session.exec(select(TopicMention)).all())
 
 
+
+
+async def test_backfill_endpoints_classify_pending_and_report(
+    client: AsyncClient, session: Session, monkeypatch
+):
+    video_id, topics = await _make_video_with_mentions(client)
+    dolar = session.exec(
+        select(TopicMention).where(TopicMention.topic_id == topics["doviz-kur"])
+    ).one()
+    monkeypatch.setattr(
+        llm_service,
+        "generate_outlook_json",
+        lambda **_: {"items": [{"mention_id": dolar.id, "outlook": "up", "explicit": True}]},
+    )
+    assert outlook.pending_video_ids(session, 10) == [video_id]
+
+    # run synchronously against the test engine (the endpoint uses a background task)
+    outlook.run_backfill(session.get_bind(), limit=10, workers=1)
+    state = outlook.backfill_state()
+    assert state["running"] is False and state["done"] == 1 and state["failed"] == 0
+
+    session.expire_all()
+    assert outlook.pending_video_ids(session, 10) == []
+    status_body = (await client.get("/outlook/backfill")).json()
+    assert status_body["coverage"] == {"instrument_mentions": 1, "classified": 1, "explicit": 1}
+
+
+async def test_backfill_post_requires_api_key(client: AsyncClient):
+    res = await client.post("/outlook/backfill", headers={"X-API-Key": "wrong"})
+    assert res.status_code in (401, 403)
