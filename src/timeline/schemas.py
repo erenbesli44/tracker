@@ -24,6 +24,10 @@ class TimelineEntry(CustomModel):
     start_time: Optional[str]
     end_time: Optional[str]
     confidence: float
+    outlook: Optional[str] = None
+    outlook_explicit: Optional[bool] = None
+    outlook_horizon: Optional[str] = None
+    outlook_quote: Optional[str] = None
 
 
 class TimelineResponse(CustomModel):

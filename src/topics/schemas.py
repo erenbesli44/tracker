@@ -44,6 +44,10 @@ class ChannelOpinionEntry(CustomModel):
     sentiment: Optional[str] = None
     key_levels: Optional[list[str]] = None
     confidence: float
+    outlook: Optional[str] = None
+    outlook_explicit: Optional[bool] = None
+    outlook_horizon: Optional[str] = None
+    outlook_quote: Optional[str] = None
 
 
 class ChannelOpinionGroup(CustomModel):

@@ -241,6 +241,21 @@ def _run_postgres_migrations(session: Session) -> None:
     )
     session.exec(text("ALTER TABLE transcript ADD COLUMN IF NOT EXISTS segments_json VARCHAR"))
     session.exec(
+        text("ALTER TABLE topic_mention ADD COLUMN IF NOT EXISTS outlook VARCHAR(10)")
+    )
+    session.exec(
+        text("ALTER TABLE topic_mention ADD COLUMN IF NOT EXISTS outlook_explicit BOOLEAN")
+    )
+    session.exec(
+        text("ALTER TABLE topic_mention ADD COLUMN IF NOT EXISTS outlook_horizon VARCHAR(80)")
+    )
+    session.exec(
+        text("ALTER TABLE topic_mention ADD COLUMN IF NOT EXISTS outlook_quote VARCHAR")
+    )
+    session.exec(
+        text("ALTER TABLE topic_mention ADD COLUMN IF NOT EXISTS outlook_version VARCHAR(20)")
+    )
+    session.exec(
         text(
             "ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_status "
             "VARCHAR(40) NOT NULL DEFAULT 'pending_transcript'"
@@ -641,6 +656,16 @@ def run_lightweight_migrations() -> None:
 
         if not _sqlite_has_column(session, "transcript", "segments_json"):
             session.exec(text("ALTER TABLE transcript ADD COLUMN segments_json VARCHAR"))
+        if not _sqlite_has_column(session, "topic_mention", "outlook"):
+            session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook VARCHAR(10)"))
+        if not _sqlite_has_column(session, "topic_mention", "outlook_explicit"):
+            session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook_explicit BOOLEAN"))
+        if not _sqlite_has_column(session, "topic_mention", "outlook_horizon"):
+            session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook_horizon VARCHAR(80)"))
+        if not _sqlite_has_column(session, "topic_mention", "outlook_quote"):
+            session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook_quote VARCHAR"))
+        if not _sqlite_has_column(session, "topic_mention", "outlook_version"):
+            session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook_version VARCHAR(20)"))
 
         if not _sqlite_has_column(session, "twitter_post", "thread_length"):
             session.exec(

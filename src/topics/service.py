@@ -200,6 +200,10 @@ def get_topic_opinions_by_channel(
                     sentiment=mention.sentiment,
                     key_levels=_parse_key_levels(mention.key_levels),
                     confidence=mention.confidence,
+                    outlook=mention.outlook,
+                    outlook_explicit=mention.outlook_explicit,
+                    outlook_horizon=mention.outlook_horizon,
+                    outlook_quote=mention.outlook_quote,
                 )
             )
 

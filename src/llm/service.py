@@ -15,6 +15,7 @@ from src.llm.prompts import (
     CLASSIFICATION_PROMPT_TEMPLATE,
     ECONOMIC_THESIS_PROMPT_TEMPLATE,
     MARKET_INFERENCE_PROMPT_TEMPLATE,
+    OUTLOOK_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
 )
 
@@ -449,3 +450,23 @@ def generate_market_inference_json(
         return payload
 
     return payload
+
+
+def generate_outlook_json(
+    *,
+    video_title: str,
+    speaker_name: str,
+    published_at: str,
+    items_block: str,
+) -> dict[str, Any]:
+    """Classify the speaker's forward-looking direction per instrument mention."""
+    prompt = _replace_placeholders(
+        OUTLOOK_PROMPT_TEMPLATE,
+        {
+            "video_title": video_title,
+            "speaker_name": speaker_name,
+            "published_at": published_at,
+            "items": items_block,
+        },
+    )
+    return _call_llm_json(prompt)

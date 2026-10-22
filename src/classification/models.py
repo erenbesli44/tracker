@@ -30,4 +30,11 @@ class TopicMention(SQLModel, table=True):
     start_time: Optional[str] = Field(default=None, max_length=20)
     end_time: Optional[str] = Field(default=None, max_length=20)
     confidence: float = Field(default=1.0)
+    # Forward-looking price expectation of the speaker for this instrument
+    # (see src/classification/outlook.py). NULL = not classified yet.
+    outlook: Optional[str] = Field(default=None, max_length=10)  # up/down/flat/none
+    outlook_explicit: Optional[bool] = Field(default=None)
+    outlook_horizon: Optional[str] = Field(default=None, max_length=80)
+    outlook_quote: Optional[str] = Field(default=None)
+    outlook_version: Optional[str] = Field(default=None, max_length=20)
     created_at: datetime = Field(default_factory=utc_now)

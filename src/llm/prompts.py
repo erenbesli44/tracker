@@ -473,3 +473,66 @@ changed_from_prev: Önceki çıkarım yoksa false. Yön veya güven 0.10+ deği�
 change_reason: changed_from_prev=true ise doldur, aksi halde null.
 contributions: Bu çıkarımda kullanılan kaynakları listele.
 """
+
+
+# ---------------------------------------------------------------------------
+# Instrument outlook — "what does THIS speaker expect THIS instrument to do next?"
+# One call per video, covering every finance mention in it. Output feeds the
+# "kim ne bekliyor" pages; a wrong arrow under a real name is the worst failure,
+# so the rules favour "none" whenever the speaker does not commit.
+# ---------------------------------------------------------------------------
+
+OUTLOOK_PROMPT_VERSION = "outlook-v3"
+
+OUTLOOK_PROMPT_TEMPLATE = """Sen bir finans içerik analistisin. Görevin: bir YouTube videosunda KONUŞMACININ, verilen her finansal araç için GELECEKTE FİYATIN hangi yöne gideceğini bekleyip beklemediğini tespit etmek.
+
+Video: {{video_title}}
+Kanal / konuşmacı: {{speaker_name}}
+Yayın tarihi: {{published_at}}
+
+Her madde için bir finansal araç, o bölümün özeti ve transkriptten ilgili kesit verilir:
+
+{{items}}
+
+KARAR KURALLARI (sırayla uygula):
+1. Sadece İLERİYE DÖNÜK beklenti sayılır. Geçmiş veya bugünkü fiyat hareketini aktarmak beklenti DEĞİLDİR.
+   "Endeks bugün %1 düştü", "altın rekor kırdı", "dolar 49 liraya geldi" → outlook="none".
+2. Aracın FİYAT YÖNÜ sorulur, ekonominin genel durumu değil.
+   "Rezervler eriyor, ekonomi kötü" tek başına Dolar/TL için yön değildir → "none".
+   "Kur 80 liraya çıkabilir", "TL değer kaybetmeye devam edecek" → Dolar/TL için "up".
+   Borsa için "olumlu bakıyorum, alım fırsatı, yatırım yapılabilir" → "up"; "uzak durun, düşüş sürer" → "down".
+3. Araç tanımına uy. Dolar/TL maddesinde yalnızca USD/TRY yönü sayılır; EUR/USD paritesi veya dolar endeksi (DXY) hakkındaki görüş Dolar/TL görüşü değildir. BIST 100 maddesinde tek bir hisse hakkındaki görüş endeks görüşü değildir.
+4. outlook değerleri:
+   "up"   = fiyatın yükseleceğini bekliyor
+   "down" = fiyatın düşeceğini bekliyor
+   "flat" = açıkça yatay / dar bant seyir bekliyor
+   "none" = ileriye dönük yön belirtmiyor, sadece bilgi/rakam/seviye aktarıyor veya konuya değinip geçiyor
+5. explicit=true: konuşmacının ANA SENARYOSU olarak bir yön söylemesi.
+   - Doğrudan ifade: "yükselecek", "hedefim 5000", "düşüş bekliyorum", "alım fırsatı", "satış zamanı", "yukarı yönlü devamını bekliyorum".
+   - Destek koşuluyla verilen teknik ana senaryo da explicit=true: "4300 üzerinde kaldıkça yükseliş bekliyorum", "80 bin üstünde kaldığı sürece hedef 92 bin". Bu, analistin beklediği yöndür.
+   - Güçlü uyarı biçimi de explicit=true: "doları 80 liradan görürseniz şaşırmayın", "2027'de Brent 50 dolara düşerse şaşırmayın".
+   explicit=false: yönün kendisi ana senaryo değil, sadece bir ihtimal olarak söylenmişse:
+   - Alternatif / risk senaryosu: "4300 kırılırsa 4100'e düşebilir", "faiz uzun süre yüksek kalırsa terse dönebilir".
+   - Dış bir OLAYA bağlı "eğer ... olursa/uzarsa" ifadeleri ("savaş uzarsa petrol yükselir", "faizler artarsa hisseler etkilenir"), konuşmacı o olayın gerçekleşmesini beklediğini AYRICA söylemiyorsa.
+   Şu anki durumu anlatmak tahmin değildir → "none": "yatay seyrediyor", "denge arayışında", "dar bantta sıkıştı" (ileriye dönük "devam edecek" demiyorsa).
+   - Kaçamak: "her şey olabilir", "yukarı da aşağı da gidebilir", "dikkatli olmak lazım".
+   Sadece destek/direnç seviyesi saymak yön değildir → "none".
+   outlook="none" ise explicit=false olmalıdır.
+6. Başkasının görüşünü aktarmak ("Goldman 5000 dolar bekliyor") konuşmacının görüşü DEĞİLDİR; konuşmacı açıkça katılıyorsa sayılır.
+7. Aynı araç için zıt yönler varsa konuşmacının vardığı sonucu / ana mesajı seç. Kısa vade ve uzun vade farklıysa ana vurguyu seç ve horizon alanına yaz. Eşit ağırlıkta zıt yönler → explicit=false.
+8. quote: konuşmacının bu beklentiyi dile getirdiği cümle, transkript kesitinden KELİMESİ KELİMESİNE, en fazla 200 karakter. Kesitte uygun cümle yoksa "". Uydurma.
+9. horizon: konuşmacı bir zaman belirttiyse kısa Türkçe ifade ("bu hafta", "yıl sonuna kadar", "orta vade"); belirtmediyse "".
+
+ÖRNEKLER:
+- Dolar/TL | "Bir sabah uyandığınızda doları 80 lira civarında görürseniz kimse şaşırmasın" → {"outlook":"up","explicit":true}
+- Dolar/TL | "Merkez Bankası rezervleri erimeye devam ediyor" (yön yok) → {"outlook":"none","explicit":false}
+- Dolar/TL | "EUR/USD paritesinde yükseliş bekleniyor, euro değer kazanacak" → {"outlook":"none","explicit":false}
+- BIST 100 | "Endeks %1,04 düştü, işlem hacmi son 4 ayın en düşüğü" → {"outlook":"none","explicit":false}
+- BIST 100 | "14.720 desteği üzerinde kalındığı sürece yukarı yönlü hareketin sürmesini bekliyorum" → {"outlook":"up","explicit":true}
+- Altın | "Altın yatırımı önermiyorum, çok yukarı hareket beklemiyorum" → {"outlook":"flat","explicit":true}
+- Altın | "4300 kırılırsa 4100'e kadar düşebilir" (ana senaryo değil) → {"outlook":"down","explicit":false}
+- Gümüş | "Bu hafta 70-71 dolara kadar toparlanma bekliyorum" → {"outlook":"up","explicit":true}
+
+ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
+{"items":[{"mention_id":<sayı>,"outlook":"up|down|flat|none","explicit":true|false,"horizon":"","quote":"","reason":"en fazla 1 cümle Türkçe gerekçe"}]}
+Girdideki her mention_id için tam bir öğe döndür."""

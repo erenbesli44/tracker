@@ -95,6 +95,10 @@ def get_topic_timeline(
             start_time=mention.start_time,
             end_time=mention.end_time,
             confidence=mention.confidence,
+            outlook=mention.outlook,
+            outlook_explicit=mention.outlook_explicit,
+            outlook_horizon=mention.outlook_horizon,
+            outlook_quote=mention.outlook_quote,
         )
         for mention, video in rows
     ]
@@ -259,6 +263,10 @@ def get_channel_topic_timeline(
             start_time=mention.start_time,
             end_time=mention.end_time,
             confidence=mention.confidence,
+            outlook=mention.outlook,
+            outlook_explicit=mention.outlook_explicit,
+            outlook_horizon=mention.outlook_horizon,
+            outlook_quote=mention.outlook_quote,
         )
         for mention, video in rows
     ]

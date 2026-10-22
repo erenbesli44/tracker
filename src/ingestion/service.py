@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 from src import cache
 from src.channels import service as channels_service
 from src.channels.schemas import ChannelCreate
+from src.classification import outlook as outlook_service
 from src.classification import service as classification_service
 from src.classification.constants import TOPIC_KEYWORDS
 from src.classification.models import TopicMention
@@ -1535,6 +1536,9 @@ def _ingest_youtube_pipeline(
     classification_mentions, classification_action = _apply_classification(session, data, video)
 
     session.commit()
+
+    if classification_action in ("created", "replaced") and llm_service._is_minimax_configured():
+        outlook_service.classify_video_safely(session, video)
 
     if summary is not None and summary_action in ("created", "updated"):
         session.refresh(summary)
