@@ -26,3 +26,6 @@ artifacts/
 # Large unrelated files
 .github/skills/
 full_transcript_*.txt
+
+# Local ops notes may contain tokens — never commit
+coolify.md
