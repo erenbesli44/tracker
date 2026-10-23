@@ -1,0 +1,49 @@
+config/inference_weights.yaml
+  s_2998d96b5bdfc2::t_f10bd440d34d8c 25
+config/known_persons.yaml
+  s_2998d96b5bdfc2::t_f02a5d3c62aa23 14-15,17,90-99,128-138
+src/classification/outlook.py
+  s_2998d96b5bdfc2::t_8154f9f12ce64c 26-28,165,172-179,187-193,198-200,202,204-205,208-209,214-247,282-306,322-334,361-365,390-447
+src/classification/outlook_router.py
+  s_2998d96b5bdfc2::t_b0848fe5c22e91 32-36
+src/classification/service.py
+  s_2998d96b5bdfc2::t_a0fb0857a2a5d4 53-63,69
+src/llm/prompts.py
+  s_2998d96b5bdfc2::t_5c6224a12f4b48 525,538,540-567
+src/llm/service.py
+  s_2998d96b5bdfc2::t_7a9800e0026fc2 19,474-493
+src/persons/detector.py
+  s_2998d96b5bdfc2::t_b68ee3acc177d1 68-72,76-77,81-89
+src/persons/models.py
+  s_2998d96b5bdfc2::t_15a17809d248ea 20-34
+src/persons/participants.py
+  s_2998d96b5bdfc2::t_13588d652aba98 1-230
+src/persons/router.py
+  s_2998d96b5bdfc2::t_e0cf40cc7dba09 7,26-34
+src/persons/schemas.py
+  s_2998d96b5bdfc2::t_2cb91aedcf9dba 32-42
+src/persons/service.py
+  s_2998d96b5bdfc2::t_676f9310634c53 79-140
+src/topics/schemas.py
+  s_2998d96b5bdfc2::t_57f95a48ee0e05 51-55,65
+src/topics/service.py
+  s_2998d96b5bdfc2::t_7849088ce27379 185-213,221,237-239,243,263
+tests/participants/test_participants.py
+  s_2998d96b5bdfc2::t_c72f05bb141068 1-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f47039c476626f7bf5a223f9776e99fbe9fb60de",
+  "prompts": {},
+  "sessions": {
+    "s_2998d96b5bdfc2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "565a1a1b-5fe0-475d-9755-116ecd8ac8c4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
