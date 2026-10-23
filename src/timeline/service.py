@@ -88,7 +88,7 @@ def get_topic_timeline(
             video_id=video.id,
             video_title=video.title,
             video_url=video.video_url,
-            published_at=video.published_at,
+            published_at=video.published_at or mention.created_at,  # OI-013: often NULL
             summary=mention.summary,
             sentiment=mention.sentiment,
             key_levels=_parse_key_levels(mention.key_levels),
@@ -256,7 +256,7 @@ def get_channel_topic_timeline(
             video_id=video.id,
             video_title=video.title,
             video_url=video.video_url,
-            published_at=video.published_at,
+            published_at=video.published_at or mention.created_at,  # OI-013: often NULL
             summary=mention.summary,
             sentiment=mention.sentiment,
             key_levels=_parse_key_levels(mention.key_levels),
