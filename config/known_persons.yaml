@@ -106,7 +106,8 @@ persons:
 # channel_defaults: handle (lowercased, without @) → person slug.
 # Used when no alias is found in the video title — i.e. single-host channels.
 channel_defaults:
-  "atillayelada": "atilla-yesilada"       # @ATİLLAYEŞİLADA normalizes to this
+  "atillayeilada": "atilla-yesilada"      # @ATİLLAYEŞİLADA normalizes to this (ş dropped)
+  "atillayelada": "atilla-yesilada"
   "atillayesilada": "atilla-yesilada"
   "devrimakyıl": "devrim-akyil"
   "devrimakyil": "devrim-akyil"

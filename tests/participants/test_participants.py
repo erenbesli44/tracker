@@ -62,6 +62,7 @@ def test_multi_guest_channels_come_from_config():
     # a multi-guest channel never falls back to a default person
     assert detector.detect_person("Seans Başlarken", "@MeseleEkonomi") is None
     assert detector.detect_person("Yeni video", "@yatirim101") == "yatirim-101"
+    assert detector.detect_channel_default("@ATİLLAYEŞİLADA") == "atilla-yesilada"
 
 
 async def _multi_guest_video(client: AsyncClient, session: Session) -> tuple[int, dict[str, int]]:
