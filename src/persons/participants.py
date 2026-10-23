@@ -36,6 +36,16 @@ _NAME_SEPARATORS = re.compile(r"\s*(?:&|,|\+|\bve\b|\bile\b)\s*")
 _NOT_A_NAME = re.compile(r"\d|[?!:]")
 
 
+_HONORIFICS = re.compile(
+    r"^(?:(?:prof|doç|doc|dr|av|uzm|yrd|öğr|ogr)\.?\s+)+", re.IGNORECASE
+)
+
+
+def clean_name(name: str) -> str:
+    """Drop titles: 'Prof. Dr. Burak Arzova' -> 'Burak Arzova'."""
+    return " ".join(_HONORIFICS.sub("", name.strip()).split())
+
+
 def normalize_name(name: str) -> str:
     """Turkish-aware, accent-insensitive key: 'ATİLLA YEŞİLADA' == 'Atilla Yesilada'."""
     lowered = name.replace("I", "ı").replace("İ", "i").lower()
@@ -51,7 +61,7 @@ def title_names(title: str | None) -> list[str]:
     tail = title.rsplit("|", 1)[1]
     names = []
     for part in _NAME_SEPARATORS.split(tail):
-        part = part.strip()
+        part = clean_name(part)
         words = part.split()
         looks_like_name = 2 <= len(words) <= 4 and not _NOT_A_NAME.search(part)
         if looks_like_name and all(w[0].isupper() for w in words):
@@ -75,10 +85,11 @@ def resolve_participants(
 ) -> list[dict[str, str]]:
     """Merge the LLM answer with title names into [{name, role}] (role host|guest).
 
-    Title spelling wins and every title name is kept (the model's host/guest
-    label is unreliable: it called Atilla Yeşilada the host of a Mesele
-    Ekonomi episode). Model-only names count only when the model says they
-    are finance commentators.
+    Title spelling wins. The model's host/guest label is unreliable (it called
+    Atilla Yeşilada the host of a Mesele Ekonomi episode), so it is not used
+    to drop anyone. A title name counts only when the model also lists it as a
+    speaker (titles also hold show names like "Ekonomi Kulübü"); model-only
+    names count only when the model says they are finance commentators.
     """
     by_key: dict[str, dict[str, str]] = {}
     title_keys = {normalize_name(n): n for n in names_in_title}
@@ -86,7 +97,7 @@ def resolve_participants(
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "").strip()
+        name = clean_name(str(item.get("name") or ""))
         key = _closest_title_key(normalize_name(name), title_keys)
         if not key or len(key.split()) < 2:
             continue
@@ -94,8 +105,6 @@ def resolve_participants(
         if key not in title_keys and item.get("finance") is not True:
             continue
         by_key[key] = {"name": title_keys.get(key, name), "role": role}
-    for key, name in title_keys.items():
-        by_key.setdefault(key, {"name": name, "role": "guest"})
     return list(by_key.values())
 
 
@@ -155,9 +164,15 @@ def find_or_create_person(
     if existing or not create:
         return existing
     # Deliberately not persons_service.create(): that also creates a channel row.
-    person = Person(name=name.strip(), slug=slugify(name))
-    session.add(person)
-    session.flush()
+    # Backfill workers run in parallel: another one may create the same person.
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        with session.begin_nested():
+            person = Person(name=name.strip(), slug=slugify(name))
+            session.add(person)
+    except IntegrityError:
+        return persons_service.get_by_slug(session, slugify(name))
     session.refresh(person)
     return person
 
@@ -185,8 +200,11 @@ def detect_participants(
     )
     participants: list[dict[str, Any]] = []
     title_keys = {normalize_name(n) for n in names}
+    title_text = f" {normalize_name(video.title or '')} "
     for p in resolve_participants(payload, names):
-        from_title = normalize_name(p["name"]) in title_keys
+        key = normalize_name(p["name"])
+        # Spelled exactly as in the title (tail names or "Alparslan Budak EKOTÜRK'te: ...").
+        from_title = key in title_keys or f" {key} " in title_text
         person = find_or_create_person(
             session, p["name"], create=from_title and not dry_run, fuzzy=not from_title
         )

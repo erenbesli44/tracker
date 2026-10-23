@@ -19,6 +19,7 @@ def test_title_names_reads_people_after_last_pipe():
     assert p.title_names("Seans Başlarken 22.10.2026") == []
     assert p.title_names("Konu | Piyasanın Efendisi") == ["Piyasanın Efendisi"]  # LLM decides
     assert p.title_names("Konu | 2027 Hedefleri") == []
+    assert p.title_names("Konu | Prof. Dr. Burak Arzova") == ["Burak Arzova"]
 
 
 def test_normalize_name_is_turkish_and_accent_insensitive():
@@ -32,13 +33,14 @@ def test_resolve_participants_keeps_title_spelling_and_drops_host_and_mentions()
         {"name": "Mehmet Şimşek", "role": "guest", "finance": False},  # not a finance guest
         {"name": "Erdal Sağlam", "role": "guest", "finance": True},
     ]}
-    out = p.resolve_participants(payload, ["Atilla Yeşilada", "Perihan Tantuğ"])
+    out = p.resolve_participants(payload, ["Atilla Yeşilada", "Perihan Tantuğ", "Ekonomi Kulübü"])
     by_name = {x["name"]: x["role"] for x in out}
     assert len(out) == 3  # the misspelling did not create a second Atilla
     assert by_name["Atilla Yeşilada"] == "guest"
     assert by_name["Perihan Tantuğ"] == "host"
     assert by_name["Erdal Sağlam"] == "guest"
     assert "Mehmet Şimşek" not in by_name
+    assert "Ekonomi Kulübü" not in by_name  # a show name the model did not list as a speaker
 
 
 def test_speaker_person_id_matches_full_or_partial_names_only_among_guests():

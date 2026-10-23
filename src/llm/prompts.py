@@ -545,7 +545,7 @@ Girdideki her mention_id için tam bir öğe döndür."""
 # Used to attribute each view to the guest who said it (src/persons/participants.py).
 # ---------------------------------------------------------------------------
 
-PARTICIPANTS_PROMPT_VERSION = "participants-v1"
+PARTICIPANTS_PROMPT_VERSION = "participants-v2"
 
 PARTICIPANTS_PROMPT_TEMPLATE = """Bir YouTube finans kanalındaki konuklu bir programın katılımcılarını belirle.
 
@@ -561,7 +561,9 @@ KURALLAR:
 2. role: programı yöneten, soru soran kişi "host"; görüşü alınan kişi "guest".
 3. name: tam ad. Başlıkta geçiyorsa başlıktaki yazımı aynen kullan. Transkriptte geçmiyor ve başlıkta da yoksa isim uydurma.
 4. finance: kişi ekonomist, analist, stratejist, yatırımcı, borsa/piyasa yorumcusu gibi finans/ekonomi yorumcusu ise true.
-5. Emin olmadığın kişiyi listeye ekleme. Hiç kimse belirlenemiyorsa boş liste döndür.
+5. Program, bölüm veya kanal adları kişi DEĞİLDİR ("Ekonomi Kulübü", "Para Ekranı", "Strateji Masası", "Piyasanın Efendisi"); bunları listeye ekleme.
+6. Unvanları yazma: "Prof. Dr. Burak Arzova" → "Burak Arzova".
+7. Emin olmadığın kişiyi listeye ekleme. Hiç kimse belirlenemiyorsa boş liste döndür.
 
 ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
 {"participants":[{"name":"Ad Soyad","role":"host|guest","finance":true|false}]}"""
