@@ -65,11 +65,26 @@ def detect_channel_default(channel_handle: str | None) -> str | None:
 
 
 def detect_person(title: str | None, channel_handle: str | None) -> str | None:
-    """Detect person slug: title aliases first, then channel default."""
+    """Detect person slug: title aliases first, then channel default.
+
+    On multi-guest channels this is only the video's headline guest; views are
+    attributed per speaker by src/persons/participants.py.
+    """
     slug = detect_from_title(title)
     if slug:
         return slug
+    if is_multi_guest_channel(channel_handle):
+        return None
     return detect_channel_default(channel_handle)
+
+
+def is_multi_guest_channel(channel_handle: str | None) -> bool:
+    """True for channels that host different guests (config: multi_guest_channels)."""
+    key = re.sub(r"[^a-z0-9]", "", _normalize_handle(channel_handle))
+    if not key:
+        return False
+    configured = _load_config().get("multi_guest_channels", []) or []
+    return any(re.sub(r"[^a-z0-9]", "", h.lower()) == key for h in configured)
 
 
 def list_known_person_slugs() -> list[str]:

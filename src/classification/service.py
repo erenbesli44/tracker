@@ -50,12 +50,23 @@ def classify_video(
         session.delete(mention)
     session.flush()
 
+    # Multi-guest channels: the speaker of each view is set later by the outlook
+    # step (src/persons/participants.py), never the video's headline guest.
+    mention_person_id = video.person_id
+    if video.channel_id is not None:
+        from src.channels.models import YouTubeChannel
+        from src.persons import detector
+
+        channel = session.get(YouTubeChannel, video.channel_id)
+        if channel is not None and detector.is_multi_guest_channel(channel.channel_handle):
+            mention_person_id = None
+
     mentions = []
     for item in data.topic_mentions:
         mention = TopicMention(
             video_id=video.id,
             channel_id=video.channel_id,
-            person_id=video.person_id,
+            person_id=mention_person_id,
             topic_id=item.topic_id,
             summary=item.summary,
             sentiment=item.sentiment,

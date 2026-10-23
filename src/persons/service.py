@@ -76,3 +76,65 @@ def update(session: Session, person: Person, data: PersonUpdate) -> Person:
 
     channels_service.ensure_from_person(session, person)
     return person
+
+
+def list_appearances(session: Session) -> list[dict]:
+    """Persons with views on active channels; multi-guest videos count only once attributed."""
+    from collections import defaultdict
+
+    from sqlalchemy import func
+
+    from src.channels.models import YouTubeChannel
+    from src.classification.models import TopicMention
+    from src.persons import detector
+    from src.persons.models import VideoParticipants
+
+    rows = session.exec(
+        select(
+            TopicMention.person_id,
+            YouTubeChannel.id,
+            YouTubeChannel.slug,
+            YouTubeChannel.channel_handle,
+            VideoParticipants.video_id,
+            func.count(TopicMention.id),
+        )
+        .join(YouTubeChannel, TopicMention.channel_id == YouTubeChannel.id)
+        .outerjoin(VideoParticipants, VideoParticipants.video_id == TopicMention.video_id)
+        .where(TopicMention.person_id.is_not(None))
+        .where(YouTubeChannel.is_active.is_(True))
+        .group_by(
+            TopicMention.person_id, YouTubeChannel.id, YouTubeChannel.slug,
+            YouTubeChannel.channel_handle, VideoParticipants.video_id,
+        )
+    ).all()
+
+    counts: dict[int, int] = defaultdict(int)
+    channel_slugs: dict[int, set[str]] = defaultdict(set)
+    own: dict[str, str] = {}  # person slug -> own channel slug
+    for person_id, _cid, slug, handle, attributed_video, n in rows:
+        multi = detector.is_multi_guest_channel(handle)
+        if multi and attributed_video is None:
+            continue  # stale headline-guest person on an unattributed video
+        counts[person_id] += n
+        channel_slugs[person_id].add(slug)
+        default = None if multi else detector.detect_channel_default(handle)
+        if default:
+            own[default] = slug
+
+    persons = (
+        session.exec(select(Person).where(Person.id.in_(list(counts)))).all() if counts else []
+    )
+    return sorted(
+        (
+            {
+                "id": p.id,
+                "name": p.name,
+                "slug": p.slug,
+                "mention_count": counts[p.id],
+                "channel_slugs": sorted(channel_slugs[p.id]),
+                "own_channel_slug": own.get(p.slug),
+            }
+            for p in persons
+        ),
+        key=lambda a: -a["mention_count"],
+    )

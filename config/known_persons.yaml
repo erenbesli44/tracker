@@ -10,12 +10,11 @@ persons:
       - "atilla yeşilada"
       - "atilla yesilada"
       - "a. yeşilada"
-      - "yeşilada"
-      - "yesilada"
 
-  - name: "Taner Gener"
-    slug: "taner-gener"
+  - name: "Taner Genek"
+    slug: "taner-genek"
     aliases:
+      - "taner genek"
       - "taner gener"
 
   - name: "Cüneyt Paksoy"
@@ -88,6 +87,16 @@ persons:
       - "emre şirin"
       - "emre sirin"
 
+  - name: "Cuma Cevik"
+    slug: "cuma-cevik"
+    aliases:
+      - "cuma cevik"
+      - "cuma çevik"
+
+  - name: "Yatırım 101"
+    slug: "yatirim-101"
+    aliases: []
+
   - name: "Bora Özkent"
     slug: "bora-ozkent"
     aliases:
@@ -116,3 +125,14 @@ channel_defaults:
   "emreşirinileBorsavefinans": "emre-sirin"
   "emresirin": "emre-sirin"
   "boraozkentlenasdaq": "bora-ozkent"
+  "cevikfinance": "cuma-cevik"
+  "yatirim101": "yatirim-101"
+
+# multi_guest_channels: handles (lowercased, without @) of channels that host
+# different guests. Their videos get per-video participants and every view is
+# attributed to the guest who said it (src/persons/participants.py); no channel
+# default person applies.
+multi_guest_channels:
+  - "meseleekonomi"
+  - "integralforextv"
+  - "ncminvest-tr"

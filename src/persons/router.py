@@ -4,7 +4,7 @@ from src.database import SessionDep
 from src.persons import service
 from src.persons.dependencies import ValidPersonDep
 from src.persons.exceptions import PersonSlugConflict
-from src.persons.schemas import PersonCreate, PersonResponse, PersonUpdate
+from src.persons.schemas import PersonAppearance, PersonCreate, PersonResponse, PersonUpdate
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
@@ -21,6 +21,15 @@ def create_person(data: PersonCreate, session: SessionDep) -> PersonResponse:
 @router.get("/", response_model=list[PersonResponse])
 def list_persons(session: SessionDep) -> list[PersonResponse]:
     return service.list_all(session)
+
+
+@router.get(
+    "/appearances",
+    response_model=list[PersonAppearance],
+    summary="Persons with attributed views and the channels they appear on",
+)
+def list_person_appearances(session: SessionDep) -> list[PersonAppearance]:
+    return service.list_appearances(session)
 
 
 @router.get("/{person_id}", response_model=PersonResponse)

@@ -522,6 +522,7 @@ KARAR KURALLARI (sırayla uygula):
 7. Aynı araç için zıt yönler varsa konuşmacının vardığı sonucu / ana mesajı seç. Kısa vade ve uzun vade farklıysa ana vurguyu seç ve horizon alanına yaz. Eşit ağırlıkta zıt yönler → explicit=false.
 8. quote: konuşmacının bu beklentiyi dile getirdiği cümle, transkript kesitinden KELİMESİ KELİMESİNE, en fazla 200 karakter. Kesitte uygun cümle yoksa "". Uydurma.
 9. horizon: konuşmacı bir zaman belirttiyse kısa Türkçe ifade ("bu hafta", "yıl sonuna kadar", "orta vade"); belirtmediyse "".
+10. speaker: bu beklentiyi dile getiren kişi. Konuşmacı listesi verildiyse adı listedeki yazımıyla aynen yaz. Sunucu söylediyse "sunucu", kimin söylediğinden emin değilsen "bilinmiyor". Tek konuşmacılı videoda konuşmacının adını yaz.
 
 ÖRNEKLER:
 - Dolar/TL | "Bir sabah uyandığınızda doları 80 lira civarında görürseniz kimse şaşırmasın" → {"outlook":"up","explicit":true}
@@ -534,5 +535,33 @@ KARAR KURALLARI (sırayla uygula):
 - Gümüş | "Bu hafta 70-71 dolara kadar toparlanma bekliyorum" → {"outlook":"up","explicit":true}
 
 ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
-{"items":[{"mention_id":<sayı>,"outlook":"up|down|flat|none","explicit":true|false,"horizon":"","quote":"","reason":"en fazla 1 cümle Türkçe gerekçe"}]}
+{"items":[{"mention_id":<sayı>,"outlook":"up|down|flat|none","explicit":true|false,"horizon":"","quote":"","speaker":"","reason":"en fazla 1 cümle Türkçe gerekçe"}]}
 Girdideki her mention_id için tam bir öğe döndür."""
+
+
+
+# ---------------------------------------------------------------------------
+# Participants — who actually speaks in a multi-guest channel's video?
+# Used to attribute each view to the guest who said it (src/persons/participants.py).
+# ---------------------------------------------------------------------------
+
+PARTICIPANTS_PROMPT_VERSION = "participants-v1"
+
+PARTICIPANTS_PROMPT_TEMPLATE = """Bir YouTube finans kanalındaki konuklu bir programın katılımcılarını belirle.
+
+Kanal: {{channel_name}}
+Video başlığı: {{video_title}}
+Başlıkta geçen isimler: {{title_names}}
+
+Transkriptin başı (sunucu genelde kendini ve konuklarını burada tanıtır):
+{{transcript_intro}}
+
+KURALLAR:
+1. Yalnızca videoda GERÇEKTEN KONUŞAN kişileri yaz. Sadece adı anılan kişiler (bakanlar, merkez bankası başkanı, başka yorumcular) katılımcı değildir.
+2. role: programı yöneten, soru soran kişi "host"; görüşü alınan kişi "guest".
+3. name: tam ad. Başlıkta geçiyorsa başlıktaki yazımı aynen kullan. Transkriptte geçmiyor ve başlıkta da yoksa isim uydurma.
+4. finance: kişi ekonomist, analist, stratejist, yatırımcı, borsa/piyasa yorumcusu gibi finans/ekonomi yorumcusu ise true.
+5. Emin olmadığın kişiyi listeye ekleme. Hiç kimse belirlenemiyorsa boş liste döndür.
+
+ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
+{"participants":[{"name":"Ad Soyad","role":"host|guest","finance":true|false}]}"""

@@ -29,4 +29,8 @@ def start_backfill(
 
 @router.get("/backfill", summary="Backfill progress and classification coverage")
 def backfill_status(session: SessionDep) -> dict:
-    return {"run": outlook.backfill_state(), "coverage": outlook.coverage(session)}
+    return {
+        "run": outlook.backfill_state(),
+        "coverage": outlook.coverage(session),
+        "attribution": outlook.attribution_coverage(session),
+    }

@@ -48,6 +48,11 @@ class ChannelOpinionEntry(CustomModel):
     outlook_explicit: Optional[bool] = None
     outlook_horizon: Optional[str] = None
     outlook_quote: Optional[str] = None
+    # Who said it. On multi-guest channels only set once the video's speakers
+    # were attributed (video_participants); otherwise None (OI-018).
+    person_id: Optional[int] = None
+    person_name: Optional[str] = None
+    person_slug: Optional[str] = None
 
 
 class ChannelOpinionGroup(CustomModel):
@@ -57,6 +62,7 @@ class ChannelOpinionGroup(CustomModel):
     channel_handle: Optional[str] = None
     mention_count: int
     latest_sentiment: Optional[str] = None
+    multi_guest: bool = False
     entries: list[ChannelOpinionEntry]
 
 

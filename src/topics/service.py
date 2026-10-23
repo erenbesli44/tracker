@@ -182,6 +182,35 @@ def get_topic_opinions_by_channel(
     )
     mention_rows = session.execute(mentions_stmt).all()
 
+    # Speakers (OI-018): person per mention; multi-guest videos only once attributed.
+    from src.persons import detector
+    from src.persons.models import Person, VideoParticipants
+
+    channels = {ch.id: ch for ch in session.exec(
+        select(YouTubeChannel).where(YouTubeChannel.id.in_(channel_ids))
+    ).all()}
+    multi_guest = {
+        cid for cid, ch in channels.items() if detector.is_multi_guest_channel(ch.channel_handle)
+    }
+    person_ids = {m.person_id for m, _ in mention_rows if m.person_id}
+    persons = (
+        {p.id: p for p in session.exec(select(Person).where(Person.id.in_(person_ids))).all()}
+        if person_ids else {}
+    )
+    multi_video_ids = [v.id for m, v in mention_rows if m.channel_id in multi_guest]
+    attributed_videos = (
+        set(session.exec(
+            select(VideoParticipants.video_id)
+            .where(VideoParticipants.video_id.in_(multi_video_ids))
+        ).all())
+        if multi_video_ids else set()
+    )
+
+    def _speaker(mention, video):
+        if mention.channel_id in multi_guest and video.id not in attributed_videos:
+            return None
+        return persons.get(mention.person_id) if mention.person_id else None
+
     # Group by channel and limit per channel
     grouped: dict[int, list[ChannelOpinionEntry]] = {}
     for mention, video in mention_rows:
@@ -189,6 +218,7 @@ def get_topic_opinions_by_channel(
         if cid not in grouped:
             grouped[cid] = []
         if len(grouped[cid]) < limit_per_channel:
+            speaker = _speaker(mention, video)
             grouped[cid].append(
                 ChannelOpinionEntry(
                     mention_id=mention.id,
@@ -204,12 +234,13 @@ def get_topic_opinions_by_channel(
                     outlook_explicit=mention.outlook_explicit,
                     outlook_horizon=mention.outlook_horizon,
                     outlook_quote=mention.outlook_quote,
+                    person_id=speaker.id if speaker else None,
+                    person_name=speaker.name if speaker else None,
+                    person_slug=speaker.slug if speaker else None,
                 )
             )
 
-    # Query 3: batch-load channel details
-    channels_stmt = select(YouTubeChannel).where(YouTubeChannel.id.in_(channel_ids))
-    channels = {ch.id: ch for ch in session.exec(channels_stmt).all()}
+    # Channel details were loaded above with the speakers.
 
     # Build response in the same order as count_rows (most recent first)
     parent_name = None
@@ -229,6 +260,7 @@ def get_topic_opinions_by_channel(
                 channel_handle=ch.channel_handle if ch else None,
                 mention_count=counts_by_channel[cid],
                 latest_sentiment=entries[0].sentiment if entries else None,
+                multi_guest=cid in multi_guest,
                 entries=entries,
             )
         )

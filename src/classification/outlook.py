@@ -23,7 +23,9 @@ from sqlmodel import Session, select
 
 from src.classification.models import TopicMention
 from src.llm import service as llm_service
-from src.llm.prompts import OUTLOOK_PROMPT_VERSION
+from src.llm.prompts import OUTLOOK_PROMPT_VERSION, PARTICIPANTS_PROMPT_VERSION
+from src.persons import detector, participants as participants_service
+from src.persons.models import VideoParticipants
 from src.topics.models import Topic
 from src.videos import service as videos_service
 from src.videos.models import Transcript, Video
@@ -160,11 +162,20 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
         for m, t in rows
     ]
     speaker = video.title or ""
+    channel = None
     if video.channel_id is not None:
         from src.channels.models import YouTubeChannel
 
         channel = session.get(YouTubeChannel, video.channel_id)
         speaker = channel.name if channel else speaker
+
+    # Multi-guest channels: name the guests so each view can be attributed (OI-018).
+    participants = None
+    if channel is not None and detector.is_multi_guest_channel(channel.channel_handle):
+        participants = participants_service.detect_participants(
+            session, video, channel.name, segments, dry_run=dry_run
+        )
+        speaker = participants_service.speaker_context(participants)
 
     payload = llm_service.generate_outlook_json(
         video_title=video.title or "",
@@ -173,18 +184,65 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
         items_block=build_items_block(items),
     )
     results = parse_outlook_items(payload, {m.id for m, _ in rows})
+    speakers = parse_speakers(payload, {m.id for m, _ in rows})
+    if participants is not None:
+        for mid, fields in results.items():
+            fields["speaker"] = speakers.get(mid)
+            fields["person_id"] = participants_service.speaker_person_id(
+                speakers.get(mid), participants
+            )
 
     if not dry_run:
         for mention, _ in rows:
             fields = results.get(mention.id)
+            if participants is not None:
+                # Unattributed views must not stay under the video's headline guest.
+                mention.person_id = fields.get("person_id") if fields else None
             if fields is None:
+                session.add(mention)
                 continue
-            for k, v in fields.items():
-                setattr(mention, k, v)
+            for k in ("outlook", "outlook_explicit", "outlook_horizon", "outlook_quote"):
+                setattr(mention, k, fields[k])
             mention.outlook_version = OUTLOOK_PROMPT_VERSION
             session.add(mention)
+        if participants is not None:
+            _clear_other_mention_persons(session, video.id, {m.id for m, _ in rows})
         session.commit()
     return results
+
+
+def parse_speakers(payload: dict[str, Any], mention_ids: set[int]) -> dict[int, str]:
+    """mention_id -> speaker name as the model wrote it (multi-guest attribution)."""
+    out: dict[int, str] = {}
+    items = payload.get("items")
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            mid = int(item.get("mention_id"))
+        except (TypeError, ValueError):
+            continue
+        speaker = str(item.get("speaker") or "").strip()
+        if mid in mention_ids and speaker:
+            out[mid] = speaker[:120]
+    return out
+
+
+def _clear_other_mention_persons(session: Session, video_id: int, classified: set[int]) -> None:
+    """Non-instrument mentions of a multi-guest video are not attributed.
+
+    Drop the headline guest from them.
+    """
+    others = session.exec(
+        select(TopicMention)
+        .where(TopicMention.video_id == video_id)
+        .where(TopicMention.person_id.is_not(None))
+        .options(load_only(TopicMention.id, TopicMention.person_id))
+    ).all()
+    for mention in others:
+        if mention.id not in classified:
+            mention.person_id = None
+            session.add(mention)
 
 
 def classify_video_safely(session: Session, video: Video) -> None:
@@ -221,6 +279,31 @@ def pending_video_ids(session: Session, limit: int, redo_all: bool = False) -> l
     return [row[0] for row in session.exec(stmt.limit(limit)).all()]
 
 
+def pending_attribution_video_ids(session: Session, limit: int) -> list[int]:
+    """Multi-guest channel videos with instrument mentions but no participants row yet."""
+    from src.channels.models import YouTubeChannel
+
+    channels = session.exec(select(YouTubeChannel)).all()
+    multi = [c.id for c in channels if detector.is_multi_guest_channel(c.channel_handle)]
+    if not multi:
+        return []
+    stmt = (
+        select(Video.id, func.max(Video.published_at))
+        .join(TopicMention, TopicMention.video_id == Video.id)
+        .join(Topic, TopicMention.topic_id == Topic.id)
+        .outerjoin(VideoParticipants, VideoParticipants.video_id == Video.id)
+        .where(Video.channel_id.in_(multi))
+        .where(Topic.slug.in_(list(INSTRUMENTS)))
+        .where(
+            (VideoParticipants.video_id.is_(None))
+            | (VideoParticipants.version != PARTICIPANTS_PROMPT_VERSION)
+        )
+        .group_by(Video.id)
+        .order_by(func.max(Video.published_at).desc().nulls_last(), Video.id.desc())
+    )
+    return [row[0] for row in session.exec(stmt.limit(limit)).all()]
+
+
 def coverage(session: Session) -> dict:
     base = (
         select(func.count(TopicMention.id))
@@ -234,6 +317,19 @@ def coverage(session: Session) -> dict:
         base.where(on_version).where(TopicMention.outlook_explicit.is_(True))
     ).one()
     return {"instrument_mentions": total, "classified": current, "explicit": explicit}
+
+
+def attribution_coverage(session: Session) -> dict:
+    """Multi-guest channel videos with / without detected participants (OI-018)."""
+    attributed = session.exec(
+        select(func.count(VideoParticipants.video_id)).where(
+            VideoParticipants.version == PARTICIPANTS_PROMPT_VERSION
+        )
+    ).one()
+    return {
+        "multi_guest_videos_attributed": attributed,
+        "multi_guest_videos_pending": len(pending_attribution_video_ids(session, 100000)),
+    }
 
 
 _state_lock = threading.Lock()
@@ -262,7 +358,11 @@ def run_backfill(engine, *, limit: int, workers: int = 3) -> None:
         )
     try:
         with Session(engine) as session:
-            ids = pending_video_ids(session, limit)
+            assign_channel_default_persons(session)
+            clear_unattributed_multi_guest_persons(session)
+            first = pending_attribution_video_ids(session, limit)
+            rest = [i for i in pending_video_ids(session, limit) if i not in set(first)]
+            ids = (first + rest)[:limit]
         with _state_lock:
             _state["queued"] = len(ids)
 
@@ -287,3 +387,61 @@ def run_backfill(engine, *, limit: int, workers: int = 3) -> None:
         with _state_lock:
             _state["running"] = False
             _state["finished_at"] = datetime.now(UTC).isoformat()
+
+
+
+def assign_channel_default_persons(session: Session) -> int:
+    """Single-host channels added to channel_defaults later (Cuma Cevik, Yatırım 101):
+    give their existing videos and mentions the channel's person. No LLM call."""
+    from src.channels.models import YouTubeChannel
+    from src.persons import service as persons_service
+
+    updated = 0
+    for channel in session.exec(select(YouTubeChannel)).all():
+        if detector.is_multi_guest_channel(channel.channel_handle):
+            continue
+        slug = detector.detect_channel_default(channel.channel_handle)
+        person = persons_service.upsert_known_person(session, slug) if slug else None
+        if person is None:
+            continue
+        videos = session.exec(
+            select(Video).where(Video.channel_id == channel.id).where(Video.person_id.is_(None))
+        ).all()
+        for video in videos:
+            video.person_id = person.id
+            session.add(video)
+            for mention in session.exec(
+                select(TopicMention)
+                .where(TopicMention.video_id == video.id)
+                .where(TopicMention.person_id.is_(None))
+            ).all():
+                mention.person_id = person.id
+                session.add(mention)
+            updated += 1
+    session.commit()
+    return updated
+
+
+def clear_unattributed_multi_guest_persons(session: Session) -> int:
+    """Drop the headline-guest person from mentions of multi-guest videos that have
+    not been attributed yet, so no view sits under the wrong name meanwhile."""
+    from src.channels.models import YouTubeChannel
+
+    multi = [
+        c.id for c in session.exec(select(YouTubeChannel)).all()
+        if detector.is_multi_guest_channel(c.channel_handle)
+    ]
+    if not multi:
+        return 0
+    attributed = select(VideoParticipants.video_id)
+    mentions = session.exec(
+        select(TopicMention)
+        .where(TopicMention.channel_id.in_(multi))
+        .where(TopicMention.person_id.is_not(None))
+        .where(TopicMention.video_id.not_in(attributed))
+    ).all()
+    for mention in mentions:
+        mention.person_id = None
+        session.add(mention)
+    session.commit()
+    return len(mentions)

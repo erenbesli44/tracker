@@ -29,3 +29,14 @@ class PersonResponse(CustomModel):
     bio: Optional[str]
     created_at: datetime
     updated_at: Optional[datetime]
+
+
+class PersonAppearance(CustomModel):
+    """A person with attributed views, and where they appear (OI-018)."""
+
+    id: int
+    name: str
+    slug: str
+    mention_count: int
+    channel_slugs: list[str]
+    own_channel_slug: Optional[str] = None  # single-host channel whose default person this is

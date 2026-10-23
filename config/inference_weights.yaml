@@ -22,7 +22,7 @@ rules:
 
   # ── NCM Investment TR: only Taner Gener ───────────────────────────────────
   - channel: "ncminvesttr"
-    person: "taner-gener"
+    person: "taner-genek"
     weight: 2.0
   - channel: "ncminvesttr"
     weight: 0.0

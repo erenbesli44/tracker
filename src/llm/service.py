@@ -16,6 +16,7 @@ from src.llm.prompts import (
     ECONOMIC_THESIS_PROMPT_TEMPLATE,
     MARKET_INFERENCE_PROMPT_TEMPLATE,
     OUTLOOK_PROMPT_TEMPLATE,
+    PARTICIPANTS_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
 )
 
@@ -467,6 +468,26 @@ def generate_outlook_json(
             "speaker_name": speaker_name,
             "published_at": published_at,
             "items": items_block,
+        },
+    )
+    return _call_llm_json(prompt)
+
+
+def generate_participants_json(
+    *,
+    channel_name: str,
+    video_title: str,
+    title_names: str,
+    transcript_intro: str,
+) -> dict[str, Any]:
+    """Who hosts and who is a guest in a multi-guest channel's video."""
+    prompt = _replace_placeholders(
+        PARTICIPANTS_PROMPT_TEMPLATE,
+        {
+            "channel_name": channel_name,
+            "video_title": video_title,
+            "title_names": title_names,
+            "transcript_intro": transcript_intro,
         },
     )
     return _call_llm_json(prompt)

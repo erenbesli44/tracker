@@ -17,3 +17,18 @@ class Person(SQLModel, table=True):
     bio: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: Optional[datetime] = Field(default=None)
+
+
+class VideoParticipants(SQLModel, table=True):
+    """Guests detected in a multi-guest channel's video (one row per video).
+
+    participants_json: [{"person_id": 9, "name": "Atilla Yeşilada", "role": "guest"}, ...]
+    plus the host as role "host" when known (host views are never attributed).
+    """
+
+    __tablename__ = "video_participants"
+
+    video_id: int = Field(primary_key=True, foreign_key="video.id")
+    participants_json: str = Field(default="[]")
+    version: str = Field(max_length=20)
+    created_at: datetime = Field(default_factory=utc_now)
