@@ -14,7 +14,9 @@ from src.llm.prompts import (
     ANALYSIS_PROMPT_TEMPLATE,
     CLASSIFICATION_PROMPT_TEMPLATE,
     ECONOMIC_THESIS_PROMPT_TEMPLATE,
+    MARKET_INFERENCE_AGENDA_RULES,
     MARKET_INFERENCE_PROMPT_TEMPLATE,
+    MARKET_INFERENCE_SUMMARY_RULES,
     OUTLOOK_PROMPT_TEMPLATE,
     PARTICIPANTS_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
@@ -400,8 +402,12 @@ def generate_market_inference_json(
     topic_label: str,
     sources_block: str,
     prev_section: str = "",
+    agenda: bool = False,
 ) -> dict[str, Any]:
-    """Call LLM for a single topic's market inference. Returns the parsed JSON dict."""
+    """Call LLM for a single topic's market inference. Returns the parsed JSON dict.
+
+    ``agenda`` topics are shown as context, so their summary must not state a direction.
+    """
     if not _is_minimax_configured():
         raise LLMGenerationError(
             "MiniMax is not configured (MINIMAX_BASE_URL / MINIMAX_API_KEY missing)."
@@ -413,6 +419,10 @@ def generate_market_inference_json(
         .replace("{{topic_label}}", topic_label)
         .replace("{{sources_block}}", sources_block)
         .replace("{{prev_section}}", prev_section)
+        .replace(
+            "{{summary_rules}}",
+            MARKET_INFERENCE_SUMMARY_RULES + (MARKET_INFERENCE_AGENDA_RULES if agenda else ""),
+        )
     )
 
     _VALID_DIRECTIONS = {"up", "down", "sideways", "mixed"}

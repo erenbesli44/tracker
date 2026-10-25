@@ -15,6 +15,7 @@ from src.classification.models import TopicMention
 from src.llm import service as llm_service
 from src.llm.service import LLMGenerationError
 from src.market_inference.constants import (
+    AGENDA_TOPIC_KEYS,
     INFERENCE_TOPIC_LABELS,
     INFERENCE_TOPIC_MAP,
     MIN_CONFIDENCE_THRESHOLD,
@@ -27,6 +28,7 @@ from src.market_inference.models import (
     MarketInferenceTopic,
 )
 from src.market_inference.weights import is_included, resolve_weight
+from src.persons import detector
 from src.persons.models import Person
 from src.topics.models import Topic
 from src.videos.models import Video
@@ -48,7 +50,9 @@ class _SourceItem:
     sentiment: str | None
     key_levels: list[str]
     mention_summary: str
-    published_at: datetime | None
+    published_at: datetime | None  # publish date, else when the video was added (OI-013)
+    outlook: str | None = None
+    outlook_quote: str | None = None
 
 
 def _utc_now() -> datetime:
@@ -87,7 +91,8 @@ def _collect_sources(
         select(TopicMention, Video, YouTubeChannel, Person)
         .join(Video, TopicMention.video_id == Video.id)  # type: ignore[arg-type]
         .join(YouTubeChannel, Video.channel_id == YouTubeChannel.id, isouter=True)  # type: ignore[arg-type]
-        .join(Person, Video.person_id == Person.id, isouter=True)  # type: ignore[arg-type]
+        # The speaker of this view (OI-018), not the video owner.
+        .join(Person, TopicMention.person_id == Person.id, isouter=True)  # type: ignore[arg-type]
         .where(TopicMention.topic_id.in_(topic_ids))  # type: ignore[attr-defined]
         .where(TopicMention.confidence >= MIN_CONFIDENCE_THRESHOLD)
         .where(
@@ -114,6 +119,9 @@ def _collect_sources(
             continue
 
         channel_handle = channel.channel_handle if channel else None
+        # Multi-guest show without a named speaker: nobody to credit, so not a source.
+        if person is None and detector.is_multi_guest_channel(channel_handle):
+            continue
         person_slug = person.slug if person else None
 
         weight = resolve_weight(channel_handle, person_slug, topic_key)
@@ -127,7 +135,8 @@ def _collect_sources(
             except Exception:
                 pass
 
-        score = weight * mention.confidence * _recency_score(video.published_at, now)
+        dated = video.published_at or video.created_at
+        score = weight * mention.confidence * _recency_score(dated, now)
         items.append(
             _SourceItem(
                 video_id=video.id,
@@ -140,7 +149,9 @@ def _collect_sources(
                 sentiment=mention.sentiment,
                 key_levels=key_levels,
                 mention_summary=mention.summary or "",
-                published_at=video.published_at,
+                published_at=dated,
+                outlook=mention.outlook if mention.outlook_explicit else None,
+                outlook_quote=mention.outlook_quote if mention.outlook_explicit else None,
             )
         )
         seen_video_ids.add(video.id)
@@ -161,9 +172,14 @@ def _build_sources_block(sources: list[_SourceItem]) -> str:
         sentiment = src.sentiment or "neutral"
         kl = ", ".join(src.key_levels) if src.key_levels else "-"
         pub = src.published_at.strftime("%Y-%m-%d") if src.published_at else "?"
+        view = ""
+        if src.outlook and src.outlook != "none":
+            quote = f' — "{src.outlook_quote}"' if src.outlook_quote else ""
+            view = f"    Açık beklenti: {src.outlook}{quote}\n"
         lines.append(
-            f"[{i}] [agirlik={src.weight:.1f}] {person} / {channel} — {title!r}\n"
+            f"[{i}] [agirlik={src.weight:.1f}] Konuşan: {person} / Kanal: {channel} — {title!r}\n"
             f"    Tarih: {pub} | Duygu: {sentiment} | Önemli seviyeler: {kl}\n"
+            f"{view}"
             f"    Özet: {src.mention_summary}\n"
             f"    video_id: {src.video_id}"
         )
@@ -285,6 +301,43 @@ def _carry_over(
     )
 
 
+def _carry_over_sources(
+    session: Session, prior: MarketInferenceTopic, run_id: int, topic_key: str
+) -> None:
+    """A carried-over topic keeps the sources its summary was written from."""
+    rows = session.exec(
+        select(MarketInferenceSource)
+        .where(MarketInferenceSource.run_id == prior.run_id)
+        .where(MarketInferenceSource.topic_key == topic_key)
+    ).all()
+    for row in rows:
+        session.add(
+            MarketInferenceSource(
+                run_id=run_id,
+                topic_key=topic_key,
+                video_id=row.video_id,
+                weight_used=row.weight_used,
+                contribution_note=row.contribution_note,
+            )
+        )
+
+
+def speakers_by_video(
+    session: Session, topic_key: str, video_ids: list[int]
+) -> dict[int, Person]:
+    """Speaker of each video's mention of this topic (TopicMention.person_id)."""
+    topic_ids = _get_topic_ids(session, INFERENCE_TOPIC_MAP.get(topic_key, []))
+    if not topic_ids or not video_ids:
+        return {}
+    rows = session.exec(
+        select(TopicMention.video_id, Person)
+        .join(Person, TopicMention.person_id == Person.id)  # type: ignore[arg-type]
+        .where(TopicMention.video_id.in_(video_ids))  # type: ignore[attr-defined]
+        .where(TopicMention.topic_id.in_(topic_ids))  # type: ignore[attr-defined]
+    ).all()
+    return {video_id: person for video_id, person in rows}
+
+
 def run_once(engine: Engine) -> dict:
     """Execute one inference cycle. Idempotent: skips if today already has a run."""
     from src.config import settings  # noqa: F401
@@ -361,6 +414,7 @@ def run_once(engine: Engine) -> dict:
                     if prior:
                         topic_row = _carry_over(prior, run_id, topic_key)
                         session.add(topic_row)
+                        _carry_over_sources(session, prior, run_id, topic_key)
                         session.commit()
                         topic_statuses[topic_key] = "carried_over"
                     else:
@@ -375,6 +429,7 @@ def run_once(engine: Engine) -> dict:
                     topic_label=label,
                     sources_block=sources_block,
                     prev_section=prev_section,
+                    agenda=topic_key in AGENDA_TOPIC_KEYS,
                 )
 
                 topic_row, source_rows = _parse_inference_payload(
@@ -404,6 +459,7 @@ def run_once(engine: Engine) -> dict:
                     topic_row = _carry_over(prior, run_id, topic_key)
                     topic_row.status = "error"
                     session.add(topic_row)
+                    _carry_over_sources(session, prior, run_id, topic_key)
                     session.commit()
 
         except Exception as exc:
