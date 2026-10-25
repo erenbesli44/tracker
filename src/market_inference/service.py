@@ -310,8 +310,11 @@ def run_once(engine: Engine) -> dict:
 
         # Check if there are any new videos in scope before creating a run record.
         new_video_count = session.exec(
+            # Same date rule as _collect_sources: created_at when published_at is NULL.
             text(
-                "SELECT COUNT(*) FROM video WHERE published_at >= :ws AND published_at <= :we"
+                "SELECT COUNT(*) FROM video"
+                " WHERE COALESCE(published_at, created_at) >= :ws"
+                " AND COALESCE(published_at, created_at) <= :we"
             ),
             params={"ws": window_start, "we": window_end},
         ).one()[0]

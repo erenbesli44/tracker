@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/inference", tags=["market-inference"])
 
 _CACHE_KEY_LATEST = "inference:latest"
+# Bounded so a run finished by the cron job (separate process) shows up without a restart.
+_CACHE_TTL_LATEST = 600
 
 
 def _build_topic_out(
@@ -114,7 +116,7 @@ def get_latest_inference(session: SessionDep) -> InferenceRunOut:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No inference run found.")
 
     out = _build_run_out(session, run)
-    cache.set_cached(_CACHE_KEY_LATEST, out.model_dump(mode="json"))
+    cache.set_cached(_CACHE_KEY_LATEST, out.model_dump(mode="json"), ttl=_CACHE_TTL_LATEST)
     return out
 
 

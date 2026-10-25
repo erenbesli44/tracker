@@ -58,6 +58,13 @@ def main() -> int:
         logger.error("Market inference run failed fatally: %s", exc, exc_info=True)
         return 2
 
+    from src import cache
+    from src.market_inference.router import _CACHE_KEY_LATEST
+
+    cache.connect()
+    cache.invalidate(_CACHE_KEY_LATEST)
+    cache.disconnect()
+
     status = result.get("status", "failed")
     logger.info("Market inference finished — status=%s run_id=%s", status, result.get("run_id"))
 
