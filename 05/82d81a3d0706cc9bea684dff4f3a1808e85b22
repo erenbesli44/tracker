@@ -1,0 +1,31 @@
+tests/videos/test_live_exclusion.py
+  s_87c794085cb1de::t_2973135ee59672 1-100
+src/ingestion/schemas.py
+  s_87c794085cb1de::t_6d895953f77a57 105,120
+src/ingestion/service.py
+  s_87c794085cb1de::t_b5c4e67900ff33 1372-1392,1442-1448,1795,1812,1882-1894,2045
+src/jobs/youtube_watch/service.py
+  s_87c794085cb1de::t_d476e4b6667be8 145-149
+src/videos/router.py
+  s_87c794085cb1de::t_947665e522cd3c 145-152
+src/videos/service.py
+  s_87c794085cb1de::t_44da5892b9e2a6 835-881
+tests/conftest.py
+  s_87c794085cb1de::t_935a2227def13c 56-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0582d81a3d0706cc9bea684dff4f3a1808e85b22",
+  "prompts": {},
+  "sessions": {
+    "s_87c794085cb1de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7986e89d-27a9-4c09-aa2d-8f15b14376c1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
