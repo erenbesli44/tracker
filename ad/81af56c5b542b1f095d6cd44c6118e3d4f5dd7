@@ -1,0 +1,23 @@
+src/jobs/market_inference/runner.py
+  s_2998d96b5bdfc2::t_2e1bca189c423c 61-67
+src/market_inference/router.py
+  s_2998d96b5bdfc2::t_aa375c29b101d4 32-33,119
+src/market_inference/service.py
+  s_2998d96b5bdfc2::t_3b3b901ad82f6f 313,315-317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad81af56c5b542b1f095d6cd44c6118e3d4f5dd7",
+  "prompts": {},
+  "sessions": {
+    "s_2998d96b5bdfc2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "565a1a1b-5fe0-475d-9755-116ecd8ac8c4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
