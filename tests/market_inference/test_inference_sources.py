@@ -20,7 +20,7 @@ from src.videos.models import Video
 NOW = datetime.now(UTC).replace(tzinfo=None)
 
 
-def _setup(session: Session) -> dict:
+def _setup(session: Session, topic_slug: str = "enflasyon") -> dict:
     SQLModel.metadata.create_all(session.get_bind())
     host = YouTubeChannel(name="Devrim Akyıl", slug="devrim-akyil", channel_handle="devrimakyl")
     show = YouTubeChannel(
@@ -30,7 +30,7 @@ def _setup(session: Session) -> dict:
     guest = Person(name="Atilla Yeşilada", slug="atilla-yesilada")
     session.add_all([host, show, owner, guest])
     session.commit()
-    topic = session.exec(select(Topic).where(Topic.slug == "enflasyon")).one()
+    topic = session.exec(select(Topic).where(Topic.slug == topic_slug)).one()
     return {"host": host, "show": show, "owner": owner, "guest": guest, "topic": topic}
 
 
@@ -65,8 +65,10 @@ def _mention(
     return video
 
 
-def _detected(session, video, *persons):
-    names = json.dumps([{"person_id": p.id, "name": p.name, "role": "guest"} for p in persons])
+def _detected(session, video, *persons, extra=()):
+    names = json.dumps(
+        [{"person_id": p.id, "name": p.name, "role": "guest"} for p in persons] + list(extra)
+    )
     session.add(VideoParticipants(video_id=video.id, participants_json=names, version="t"))
     session.commit()
 
@@ -206,3 +208,31 @@ def test_agenda_prompt_forbids_direction_in_summary(monkeypatch):
     assert "GÜNDEM özetidir" in prompts[0]
     assert "GÜNDEM özetidir" not in prompts[1]
     assert all("ÖZET YAZIM KURALLARI" in p and "{{" not in p for p in prompts)
+
+
+def test_one_guest_rule_ignores_hosts_and_needs_a_known_guest(session: Session):
+    ctx = _setup(session)
+    host = Person(name="Program Sunucusu", slug="program-sunucusu")
+    session.add(host)
+    session.commit()
+    with_host = _mention(session, ctx, ctx["show"], 1)
+    _detected(session, with_host, ctx["guest"],
+              extra=[{"person_id": host.id, "name": host.name, "role": "host"}])
+    unknown_second = _mention(session, ctx, ctx["show"], 2)
+    _detected(session, unknown_second, ctx["guest"],
+              extra=[{"person_id": None, "name": "Bilinmeyen Konuk", "role": "guest"}])
+
+    speakers = service.speakers_by_video(
+        session, "enflasyon", [with_host.id, unknown_second.id]
+    )
+
+    assert speakers == {with_host.id: ctx["guest"], unknown_second.id: None}
+
+
+def test_instrument_view_left_unnamed_by_the_speaker_step_stays_unnamed(session: Session):
+    ctx = _setup(session, "doviz-kur")
+    # The speaker step left person_id empty: the host or an unknown speaker said it.
+    video = _mention(session, ctx, ctx["show"], 1)
+    _detected(session, video, ctx["guest"])
+
+    assert service.speakers_by_video(session, "dolar-tl", [video.id]) == {video.id: None}

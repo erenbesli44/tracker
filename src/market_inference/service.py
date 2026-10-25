@@ -123,7 +123,7 @@ def _collect_sources(
             continue
 
         channel_handle = channel.channel_handle if channel else None
-        person = _credited(session, person, video, channel, detected)
+        person = _credited(session, topic_key, person, video, channel, detected)
         person_slug = person.slug if person else None
 
         weight = resolve_weight(channel_handle, person_slug, topic_key)
@@ -332,7 +332,8 @@ def _detected_participants(
     session: Session, pairs: list[tuple[Video, YouTubeChannel | None]]
 ) -> dict[int, int | None]:
     """Multi-guest videos whose participants were detected (OI-018), mapped to the
-    person_id of the only named participant, or None when there are several."""
+    person_id of the only guest (hosts excluded), or None when there is not exactly
+    one guest or that guest is not a known person."""
     ids = [
         v.id for v, c in pairs
         if c is not None and detector.is_multi_guest_channel(c.channel_handle)
@@ -343,13 +344,16 @@ def _detected_participants(
     for row in session.exec(
         select(VideoParticipants).where(VideoParticipants.video_id.in_(ids))  # type: ignore[attr-defined]
     ).all():
-        named = {p.get("person_id") for p in json.loads(row.participants_json or "[]")} - {None}
-        detected[row.video_id] = next(iter(named)) if len(named) == 1 else None
+        guests = [
+            p for p in json.loads(row.participants_json or "[]") if p.get("role") != "host"
+        ]
+        detected[row.video_id] = guests[0].get("person_id") if len(guests) == 1 else None
     return detected
 
 
 def _credited(
     session: Session,
+    topic_key: str,
     person: Person | None,
     video: Video,
     channel: YouTubeChannel | None,
@@ -358,12 +362,14 @@ def _credited(
     """The speaker to name, with the same rule as the topic opinions: a multi-guest
     video names nobody until its participants are detected. The speaker step only
     covers instruments, so an agenda mention on a one-guest episode is credited to
-    that guest. Otherwise unnamed (the channel only)."""
+    that guest (a point the host made there is credited to the guest too). An
+    instrument mention the speaker step left unnamed stays unnamed (the host or an
+    unknown speaker). Otherwise unnamed (the channel only)."""
     if channel is None or not detector.is_multi_guest_channel(channel.channel_handle):
         return person
     if video.id not in detected:
         return None
-    if person is not None:
+    if person is not None or topic_key not in AGENDA_TOPIC_KEYS:
         return person
     sole = detected[video.id]
     return session.get(Person, sole) if sole else None
@@ -390,7 +396,7 @@ def speakers_by_video(
     speakers: dict[int, Person | None] = {}
     for _, video, channel, person in rows:
         if video.id not in speakers:
-            speakers[video.id] = _credited(session, person, video, channel, detected)
+            speakers[video.id] = _credited(session, topic_key, person, video, channel, detected)
     return speakers
 
 
