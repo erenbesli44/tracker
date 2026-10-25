@@ -29,7 +29,7 @@ from src.market_inference.models import (
 )
 from src.market_inference.weights import is_included, resolve_weight
 from src.persons import detector
-from src.persons.models import Person
+from src.persons.models import Person, VideoParticipants
 from src.topics.models import Topic
 from src.videos.models import Video
 
@@ -98,6 +98,8 @@ def _collect_sources(
         .where(
             (YouTubeChannel.id.is_(None)) | (YouTubeChannel.is_active.is_(True))  # type: ignore[attr-defined]
         )
+        # One source per video: the most confident mention, same pick as speakers_by_video.
+        .order_by(TopicMention.confidence.desc(), TopicMention.id)  # type: ignore[attr-defined]
         .where(
             # Use published_at when available, fall back to created_at
             (Video.published_at >= window_start) | (  # type: ignore[operator]
@@ -111,6 +113,8 @@ def _collect_sources(
         )
     ).all()
 
+    detected = _detected_participants(session, [(v, c) for _, v, c, _ in rows])
+
     items: list[_SourceItem] = []
     seen_video_ids: set[int] = set()
 
@@ -119,9 +123,7 @@ def _collect_sources(
             continue
 
         channel_handle = channel.channel_handle if channel else None
-        # Multi-guest show without a named speaker: nobody to credit, so not a source.
-        if person is None and detector.is_multi_guest_channel(channel_handle):
-            continue
+        person = _credited(session, person, video, channel, detected)
         person_slug = person.slug if person else None
 
         weight = resolve_weight(channel_handle, person_slug, topic_key)
@@ -161,6 +163,9 @@ def _collect_sources(
     return items[:TOP_K_SOURCES]
 
 
+_OUTLOOK_WORDS = {"up": "yükseliş", "down": "düşüş", "flat": "yatay seyir"}
+
+
 def _build_sources_block(sources: list[_SourceItem]) -> str:
     if not sources:
         return "(Kaynak bulunamadı)"
@@ -175,7 +180,8 @@ def _build_sources_block(sources: list[_SourceItem]) -> str:
         view = ""
         if src.outlook and src.outlook != "none":
             quote = f' — "{src.outlook_quote}"' if src.outlook_quote else ""
-            view = f"    Açık beklenti: {src.outlook}{quote}\n"
+            word = _OUTLOOK_WORDS.get(src.outlook, src.outlook)
+            view = f"    Açık beklenti: {word}{quote}\n"
         lines.append(
             f"[{i}] [agirlik={src.weight:.1f}] Konuşan: {person} / Kanal: {channel} — {title!r}\n"
             f"    Tarih: {pub} | Duygu: {sentiment} | Önemli seviyeler: {kl}\n"
@@ -322,20 +328,70 @@ def _carry_over_sources(
         )
 
 
+def _detected_participants(
+    session: Session, pairs: list[tuple[Video, YouTubeChannel | None]]
+) -> dict[int, int | None]:
+    """Multi-guest videos whose participants were detected (OI-018), mapped to the
+    person_id of the only named participant, or None when there are several."""
+    ids = [
+        v.id for v, c in pairs
+        if c is not None and detector.is_multi_guest_channel(c.channel_handle)
+    ]
+    if not ids:
+        return {}
+    detected: dict[int, int | None] = {}
+    for row in session.exec(
+        select(VideoParticipants).where(VideoParticipants.video_id.in_(ids))  # type: ignore[attr-defined]
+    ).all():
+        named = {p.get("person_id") for p in json.loads(row.participants_json or "[]")} - {None}
+        detected[row.video_id] = next(iter(named)) if len(named) == 1 else None
+    return detected
+
+
+def _credited(
+    session: Session,
+    person: Person | None,
+    video: Video,
+    channel: YouTubeChannel | None,
+    detected: dict[int, int | None],
+) -> Person | None:
+    """The speaker to name, with the same rule as the topic opinions: a multi-guest
+    video names nobody until its participants are detected. The speaker step only
+    covers instruments, so an agenda mention on a one-guest episode is credited to
+    that guest. Otherwise unnamed (the channel only)."""
+    if channel is None or not detector.is_multi_guest_channel(channel.channel_handle):
+        return person
+    if video.id not in detected:
+        return None
+    if person is not None:
+        return person
+    sole = detected[video.id]
+    return session.get(Person, sole) if sole else None
+
+
 def speakers_by_video(
     session: Session, topic_key: str, video_ids: list[int]
-) -> dict[int, Person]:
-    """Speaker of each video's mention of this topic (TopicMention.person_id)."""
+) -> dict[int, Person | None]:
+    """Speaker of each video's mention of this topic, picked as in _collect_sources."""
     topic_ids = _get_topic_ids(session, INFERENCE_TOPIC_MAP.get(topic_key, []))
     if not topic_ids or not video_ids:
         return {}
     rows = session.exec(
-        select(TopicMention.video_id, Person)
-        .join(Person, TopicMention.person_id == Person.id)  # type: ignore[arg-type]
+        select(TopicMention, Video, YouTubeChannel, Person)
+        .join(Video, TopicMention.video_id == Video.id)  # type: ignore[arg-type]
+        .join(YouTubeChannel, Video.channel_id == YouTubeChannel.id, isouter=True)  # type: ignore[arg-type]
+        .join(Person, TopicMention.person_id == Person.id, isouter=True)  # type: ignore[arg-type]
         .where(TopicMention.video_id.in_(video_ids))  # type: ignore[attr-defined]
         .where(TopicMention.topic_id.in_(topic_ids))  # type: ignore[attr-defined]
+        .where(TopicMention.confidence >= MIN_CONFIDENCE_THRESHOLD)
+        .order_by(TopicMention.confidence.desc(), TopicMention.id)  # type: ignore[attr-defined]
     ).all()
-    return {video_id: person for video_id, person in rows}
+    detected = _detected_participants(session, [(v, c) for _, v, c, _ in rows])
+    speakers: dict[int, Person | None] = {}
+    for _, video, channel, person in rows:
+        if video.id not in speakers:
+            speakers[video.id] = _credited(session, person, video, channel, detected)
+    return speakers
 
 
 def run_once(engine: Engine) -> dict:

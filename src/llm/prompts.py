@@ -480,19 +480,22 @@ MARKET_INFERENCE_SUMMARY_RULES = """
 ====================
 - Okur önceki çıkarımı ve kaynak listesini görmez. "Yeni kaynaklar", "önceki çıkarım",
   "kaynakların çoğu", "[3] numaralı kaynak" gibi ifadeler kullanma; konunun kendisini anlat.
-- Bir görüşü aktarırken kimin söylediğini adıyla yaz ("Atilla Yeşilada ... diyor"); isim
-  yalnızca "Konuşan" alanındaki kişi olabilir, "-" ise isim verme.
+- Bir yorumcunun görüşünü aktarırken kimin söylediğini adıyla yaz ("Atilla Yeşilada ... diyor");
+  yorumcu adını yalnızca "Konuşan" alanından al, "-" ise yorumcu adı verme. Haberdeki
+  aktörler (kurumlar, politikacılar) adıyla anılabilir.
 - Güven düzeyi veya kaynak ağırlığı gibi iç değerlendirme terimleri yazma.
+- Bu kurallar contributions[*].note için de geçerlidir.
 """
 
 # Added for agenda topics (faiz, enflasyon, jeopolitik, iç siyaset): shown as context only.
 MARKET_INFERENCE_AGENDA_RULES = """\
 - Bu konu bir GÜNDEM özetidir, piyasa yönü tahmini değildir. Özette yön kelimesi kullanma
-  ("yükseliş/düşüş bekleniyor", "yukarı/aşağı yönlü", "baskı", "olumlu/olumsuz görünüm" yok).
+  ("yükseliş/düşüş bekleniyor", "yukarı/aşağı yönlü", "olumlu/olumsuz görünüm" yok).
   Ne olduğunu, ne konuşulduğunu ve yorumcuların hangi gelişmeleri izlediğini anlat.
   Bir yorumcu açıkça bir rakam veya beklenti söylediyse onu kişiye atfederek aktar
   ("X, yıl sonu enflasyonunun yüzde 30 civarında kalacağını söylüyor").
-- `direction` ve `confidence` alanlarını yine doldur (iç kullanım), ama özete yansıtma.
+- `direction` ve `confidence` alanlarını yine doldur (iç kullanım), ama özete ve notlara
+  yansıtma.
 """
 
 

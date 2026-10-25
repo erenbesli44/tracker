@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 from sqlmodel import Session, SQLModel, select
@@ -12,7 +13,7 @@ from src.market_inference.models import (
     MarketInferenceSource,
     MarketInferenceTopic,
 )
-from src.persons.models import Person
+from src.persons.models import Person, VideoParticipants
 from src.topics.models import Topic
 from src.videos.models import Video
 
@@ -33,24 +34,28 @@ def _setup(session: Session) -> dict:
     return {"host": host, "show": show, "owner": owner, "guest": guest, "topic": topic}
 
 
-def _mention(session, ctx, channel, n, *, speaker=None, video_person=None, published_at=None):
-    video = Video(
-        channel_id=channel.id,
-        person_id=video_person.id if video_person else None,
-        video_url=f"https://youtube.com/watch?v=v{n}",
-        video_id=f"v{n}",
-        title=f"Video {n}",
-        published_at=published_at,
-    )
-    session.add(video)
-    session.commit()
+def _mention(
+    session, ctx, channel, n, *, speaker=None, video_person=None, published_at=None,
+    confidence=0.9, video=None,
+):
+    if video is None:
+        video = Video(
+            channel_id=channel.id,
+            person_id=video_person.id if video_person else None,
+            video_url=f"https://youtube.com/watch?v=v{n}",
+            video_id=f"v{n}",
+            title=f"Video {n}",
+            published_at=published_at,
+        )
+        session.add(video)
+        session.commit()
     mention = TopicMention(
         video_id=video.id,
         channel_id=channel.id,
         person_id=speaker.id if speaker else None,
         topic_id=ctx["topic"].id,
         summary=f"Özet {n}",
-        confidence=0.9,
+        confidence=confidence,
         outlook="up",
         outlook_explicit=True,
         outlook_quote="yüzde 30'da kalır",
@@ -60,26 +65,76 @@ def _mention(session, ctx, channel, n, *, speaker=None, video_person=None, publi
     return video
 
 
-def test_sources_credit_the_speaker_and_skip_unnamed_guest_shows(session: Session):
+def _detected(session, video, *persons):
+    names = json.dumps([{"person_id": p.id, "name": p.name, "role": "guest"} for p in persons])
+    session.add(VideoParticipants(video_id=video.id, participants_json=names, version="t"))
+    session.commit()
+
+
+def _window():
+    return NOW - timedelta(days=1), NOW + timedelta(days=1)
+
+
+def test_agenda_view_on_a_one_guest_episode_is_credited_to_the_guest(session: Session):
     ctx = _setup(session)
-    # Guest on a multi-guest show: credited to the guest, not the video owner.
-    guest_video = _mention(
-        session, ctx, ctx["show"], 1, speaker=ctx["guest"], video_person=ctx["owner"]
-    )
-    # Multi-guest show with no named speaker: nobody to credit.
-    _mention(session, ctx, ctx["show"], 2)
+    other = Person(name="Yunus Emre Erdölen", slug="yunus-emre-erdolen")
+    session.add(other)
+    session.commit()
+    # Agenda mentions never get a speaker (the outlook step covers instruments only).
+    solo = _mention(session, ctx, ctx["show"], 1, video_person=ctx["owner"])
+    _detected(session, solo, ctx["guest"])
+    panel = _mention(session, ctx, ctx["show"], 2, video_person=ctx["owner"])
+    _detected(session, panel, ctx["guest"], other)
+    host_video = _mention(session, ctx, ctx["host"], 3)
 
-    sources = service._collect_sources(
-        session, "enflasyon", NOW - timedelta(days=1), NOW + timedelta(days=1)
+    sources = {s.video_id: s for s in service._collect_sources(session, "enflasyon", *_window())}
+
+    assert sources[solo.id].person_name == "Atilla Yeşilada"
+    assert sources[solo.id].weight == 2.0  # inference_weights.yaml: Atilla on Mesele
+    # Panel without a speaker: nobody to credit, and the weight config drops unnamed
+    # Mesele views. Never the video owner (the headline guest).
+    assert panel.id not in sources
+    # Single-host channel without a person on the mention stays a source.
+    assert sources[host_video.id].person_name is None
+    assert "Konuşan: - / Kanal: Devrim Akyıl" in service._build_sources_block(
+        [sources[host_video.id]]
     )
 
-    assert [s.video_id for s in sources] == [guest_video.id]
-    assert sources[0].person_name == "Atilla Yeşilada"
-    assert sources[0].outlook == "up"
-    assert sources[0].outlook_quote == "yüzde 30'da kalır"
+
+def test_guest_is_named_only_once_participants_are_detected(session: Session):
+    ctx = _setup(session)
+    detected = _mention(session, ctx, ctx["show"], 1, speaker=ctx["guest"])
+    _detected(session, detected, ctx["guest"])
+    stale = _mention(session, ctx, ctx["show"], 2, speaker=ctx["guest"])
+
+    sources = {s.video_id: s for s in service._collect_sources(session, "enflasyon", *_window())}
+    speakers = service.speakers_by_video(session, "enflasyon", [detected.id, stale.id])
+
+    assert sources[detected.id].person_name == "Atilla Yeşilada"
+    assert sources[detected.id].outlook == "up"
+    assert sources[detected.id].outlook_quote == "yüzde 30'da kalır"
     # No publish date (OI-013): dated by when the video was added.
-    assert sources[0].published_at == guest_video.created_at
-    assert "Konuşan: Atilla Yeşilada" in service._build_sources_block(sources)
+    assert sources[detected.id].published_at == detected.created_at
+    assert "Açık beklenti: yükseliş" in service._build_sources_block(list(sources.values()))
+    # Speaker left from before detection: not named, so the Mesele weight rule drops it.
+    assert stale.id not in sources
+    assert speakers == {detected.id: ctx["guest"], stale.id: None}
+
+
+def test_source_and_api_pick_the_same_mention(session: Session):
+    ctx = _setup(session)
+    other = Person(name="Yunus Emre Erdölen", slug="yunus-emre-erdolen")
+    session.add(other)
+    session.commit()
+    video = _mention(session, ctx, ctx["show"], 1, speaker=other, confidence=0.6)
+    _mention(session, ctx, ctx["show"], 1, speaker=ctx["guest"], confidence=0.9, video=video)
+    _detected(session, video, ctx["guest"], other)
+
+    sources = service._collect_sources(session, "enflasyon", *_window())
+    speakers = service.speakers_by_video(session, "enflasyon", [video.id])
+
+    assert [s.person_name for s in sources] == ["Atilla Yeşilada"]
+    assert speakers[video.id] == ctx["guest"]
 
 
 def test_carried_over_topic_keeps_its_sources(session: Session):
@@ -116,6 +171,7 @@ def test_api_source_shows_speaker_and_date(session: Session):
         session, ctx, ctx["show"], 4,
         speaker=ctx["guest"], video_person=ctx["owner"], published_at=published,
     )
+    _detected(session, video, ctx["guest"])
     run = MarketInferenceRun(run_date="2026-10-25", status="success")
     session.add(run)
     session.commit()
