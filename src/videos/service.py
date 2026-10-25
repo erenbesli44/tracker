@@ -832,6 +832,53 @@ def fetch_publish_date_from_html(video_url: str) -> datetime | None:
     return None
 
 
+def fetch_is_live_content(video_url: str) -> bool | None:
+    """Return True when the video is (or was) a live stream, None if unknown.
+
+    Reads ``isLiveContent`` from the watch page; past streams keep it true.
+    """
+    canonical = canonicalize_youtube_url(video_url)
+    request = Request(
+        canonical,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    try:
+        _sleep_request_pacing()
+        with _youtube_request_slot():
+            with urlopen(request, timeout=15) as response:  # nosec B310
+                html = response.read().decode("utf-8", errors="ignore")
+    except Exception as exc:
+        logger.warning("Live check failed for %s: %s", canonical, exc)
+        return None
+
+    match = re.search(r'"isLiveContent"\s*:\s*(true|false)', html)
+    return match.group(1) == "true" if match else None
+
+
+def delete_video(session: Session, video: Video) -> None:
+    """Delete a video and every row that references it."""
+    from src.classification.models import TopicMention
+    from src.jobs.twitter_post.models import TwitterPost
+    from src.market_inference.models import MarketInferenceSource
+    from src.persons.models import VideoParticipants
+
+    for model in (
+        TopicMention,
+        VideoParticipants,
+        MarketInferenceSource,
+        TwitterPost,
+        Transcript,
+        VideoSummary,
+    ):
+        for row in session.exec(select(model).where(model.video_id == video.id)).all():
+            session.delete(row)
+    session.delete(video)
+    session.commit()
+
+
 def backfill_published_dates(session: Session) -> list[dict]:
     """Fetch and update published_at for all videos missing it."""
     videos = list(session.exec(select(Video).where(Video.published_at.is_(None))).all())

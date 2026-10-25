@@ -142,6 +142,14 @@ def get_video(video: ValidVideoDep, session: SessionDep) -> VideoWithTranscript:
     return result
 
 
+@router.delete("/{video_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_video(video: ValidVideoDep, session: SessionDep) -> None:
+    """Remove a video with its transcript, summary, mentions and other links."""
+    video_db_id = video.id
+    service.delete_video(session, video)
+    cache.invalidate(_summary_cache_key(video_db_id))
+
+
 @router.get("/{video_id}/transcript", response_model=TranscriptDetailResponse)
 def get_video_transcript(video: ValidVideoDep, session: SessionDep) -> TranscriptDetailResponse:
     transcript = service.get_transcript(session, video.id)

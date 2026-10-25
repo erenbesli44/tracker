@@ -1369,6 +1369,27 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
     )
 
 
+def _list_channel_stream_ids(channel_id: str, limit: int = 50) -> set[str]:
+    """IDs on the channel's Streams tab. Live streams are never tracked.
+
+    Most channels have no Streams tab; yt-dlp then raises and we return an empty set.
+    """
+    channel_url = f"https://www.youtube.com/channel/{channel_id}/streams"
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "playlistend": limit,
+        "skip_download": True,
+    }
+    try:
+        info = videos_service.extract_info_with_yt_dlp(channel_url, opts) or {}
+    except Exception as exc:
+        logger.info("No streams listed for channel_id=%s: %s", channel_id, exc)
+        return set()
+    return {(entry or {}).get("id") for entry in info.get("entries") or []} - {None}
+
+
 def _ensure_channel_from_playlist(
     session: Session,
     channel_id: str,
@@ -1418,6 +1439,13 @@ def ingest_youtube(
     session: Session,
     data: IngestionYoutubeRequest,
 ) -> IngestionYoutubeResponse:
+    video_url = data.video.video_url
+    is_new = videos_service.get_by_url(session, video_url) is None
+    if is_new and videos_service.fetch_is_live_content(video_url):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Live streams are not tracked.",
+        )
     try:
         return _ingest_youtube_pipeline(session, data)
     except Exception as exc:
@@ -1764,6 +1792,7 @@ def ingest_youtube_channel(
     channel_id = _resolve_youtube_channel_id_for_run(session, data.youtube_channel)
     playlist_info = _list_recent_channel_videos(channel_id, data.video_count)
     candidates = playlist_info.candidates
+    stream_ids = _list_channel_stream_ids(channel_id)
     channel, _channel_action = _ensure_channel_from_playlist(session, channel_id, playlist_info)
 
     if not playlist_info.candidates:
@@ -1780,6 +1809,7 @@ def ingest_youtube_channel(
     videos_ingested = 0
     videos_skipped_existing = 0
     videos_skipped_no_transcript = 0
+    videos_skipped_live = 0
     errors_count = 0
     results: list[IngestionYoutubeChannelRunVideoResult] = []
 
@@ -1848,6 +1878,19 @@ def ingest_youtube_channel(
                     )
                 )
                 continue
+
+        if existing_video is None and candidate.video_id in stream_ids:
+            logger.info("Live stream not tracked: video_id=%s", candidate.video_id)
+            videos_skipped_live += 1
+            results.append(
+                IngestionYoutubeChannelRunVideoResult(
+                    youtube_video_id=candidate.video_id,
+                    video_url=candidate.video_url,
+                    status="skipped_live",
+                    detail="Live streams are not tracked.",
+                )
+            )
+            continue
 
         video = _ensure_video_for_transcript_attempt(
             session,
@@ -1999,6 +2042,7 @@ def ingest_youtube_channel(
         videos_ingested=videos_ingested,
         videos_skipped_existing=videos_skipped_existing,
         videos_skipped_no_transcript=videos_skipped_no_transcript,
+        videos_skipped_live=videos_skipped_live,
         errors_count=errors_count,
         results=results,
     )

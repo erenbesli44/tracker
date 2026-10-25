@@ -142,7 +142,11 @@ def _process_channel(engine: Engine, watched: WatchedChannel) -> ChannelJobResul
         with Session(engine) as session:
             result = ingestion_service.ingest_youtube_channel(session, request)
 
-        videos_skipped = result.videos_skipped_existing + result.videos_skipped_no_transcript
+        videos_skipped = (
+            result.videos_skipped_existing
+            + result.videos_skipped_no_transcript
+            + result.videos_skipped_live
+        )
         error_detail: str | None = None
         if result.errors_count > 0:
             error_detail = f"{result.errors_count} video(s) failed ingestion"

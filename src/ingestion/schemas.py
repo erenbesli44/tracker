@@ -102,6 +102,7 @@ class IngestionYoutubeChannelRunVideoResult(CustomModel):
         "ingested",
         "skipped_existing",
         "skipped_transcript_unavailable",
+        "skipped_live",
         "failed",
     ]
     video_id: int | None = None
@@ -116,5 +117,6 @@ class IngestionYoutubeChannelRunResponse(CustomModel):
     videos_ingested: int
     videos_skipped_existing: int
     videos_skipped_no_transcript: int
+    videos_skipped_live: int = 0
     errors_count: int
     results: list[IngestionYoutubeChannelRunVideoResult]
