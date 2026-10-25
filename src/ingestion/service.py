@@ -1306,8 +1306,8 @@ def _resolve_youtube_channel_id_for_run(session: Session, youtube_channel: str) 
     return _resolve_youtube_channel_id(youtube_channel)
 
 
-def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylistInfo:
-    channel_url = f"https://www.youtube.com/channel/{channel_id}/videos"
+def _extract_channel_tab(channel_id: str, tab: str, limit: int) -> dict:
+    channel_url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -1317,15 +1317,31 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
         "extractor_args": {"youtube": {"lang": ["tr"]}},
         "http_headers": {"Accept-Language": "tr-TR,tr;q=0.9"},
     }
+    return videos_service.extract_info_with_yt_dlp(channel_url, opts) or {}
+
+
+def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylistInfo:
+    """Return the newest ``limit`` uploads plus the newest ``limit`` past live streams.
+
+    Live streams sit on the channel's Streams tab and never appear on the Videos
+    tab, so channels that mostly broadcast live were missed. The Streams tab is
+    optional: a channel without one (or a failed fetch) keeps the uploads only.
+    """
     try:
-        info = videos_service.extract_info_with_yt_dlp(channel_url, opts)
+        info = _extract_channel_tab(channel_id, "videos", limit)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to fetch YouTube channel videos.",
         ) from exc
 
-    info = info or {}
+    try:
+        stream_entries = _extract_channel_tab(channel_id, "streams", limit).get("entries") or []
+    except Exception as exc:
+        # yt-dlp raises "This channel does not have a streams tab" for most channels.
+        logger.info("No streams listed for channel_id=%s: %s", channel_id, exc)
+        stream_entries = []
+
     # Channel-level metadata from the playlist response
     channel_name: str | None = (
         str(info.get("channel") or info.get("uploader") or "").strip() or None
@@ -1334,14 +1350,16 @@ def _list_recent_channel_videos(channel_id: str, limit: int) -> _ChannelPlaylist
     channel_handle: str | None = raw_handle if raw_handle else None
     profile = videos_service.extract_channel_profile_from_info(info) if info else None
 
-    entries = info.get("entries") or []
+    entries = list((info.get("entries") or [])[:limit]) + list(stream_entries[:limit])
     candidates: list[_ChannelVideoCandidate] = []
-    for entry in entries[:limit]:
+    seen: set[str] = set()
+    for entry in entries:
         if not entry:
             continue
         video_id = (entry.get("id") or "").strip()
-        if not video_id:
+        if not video_id or video_id in seen:
             continue
+        seen.add(video_id)
 
         title = entry.get("title") or None
 
