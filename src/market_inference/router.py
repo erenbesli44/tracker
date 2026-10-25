@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from src import cache
 from src.channels.models import YouTubeChannel
 from src.database import SessionDep, engine
+from src.market_inference import service
 from src.market_inference.constants import INFERENCE_TOPIC_LABELS, INFERENCE_TOPIC_MAP
 from src.market_inference.models import (
     MarketInferenceRun,
@@ -23,7 +24,6 @@ from src.market_inference.schemas import (
     InferenceTopicOut,
 )
 from src.videos.models import Video
-from src.persons.models import Person
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/inference", tags=["market-inference"])
@@ -44,17 +44,20 @@ def _build_topic_out(
         .where(MarketInferenceSource.topic_key == topic.topic_key)
     ).all()
 
+    speakers = service.speakers_by_video(session, topic.topic_key, [s.video_id for s in sources])
+
     source_outs: list[InferenceSourceOut] = []
     for src in sources:
         video = session.get(Video, src.video_id)
         channel = session.get(YouTubeChannel, video.channel_id) if video and video.channel_id else None
-        person = session.get(Person, video.person_id) if video and video.person_id else None
+        person = speakers.get(src.video_id)
         source_outs.append(
             InferenceSourceOut(
                 video_id=src.video_id,
                 title=video.title if video else None,
                 channel_name=channel.name if channel else None,
                 person_name=person.name if person else None,
+                published_at=(video.published_at or video.created_at) if video else None,
                 weight_used=src.weight_used,
                 contribution_note=src.contribution_note,
             )
@@ -194,8 +197,6 @@ def get_topic_history(
 
 
 def _trigger_background(run_in_background: bool = False) -> dict:
-    from src.market_inference import service
-
     result = service.run_once(engine)
     if result.get("status") in ("success", "skipped_no_new_videos", "partial_fail"):
         cache.invalidate(_CACHE_KEY_LATEST)

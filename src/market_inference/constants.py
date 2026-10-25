@@ -29,6 +29,10 @@ INFERENCE_TOPIC_LABELS: dict[str, str] = {
     "ic-siyaset": "İç Siyaset",
 }
 
+# Topics with no explicit-view data (the outlook classifier covers instruments only).
+# Their summary is shown on /konular as context, never as an expected direction.
+AGENDA_TOPIC_KEYS = frozenset({"faiz", "enflasyon", "jeopolitik", "ic-siyaset"})
+
 VALID_DIRECTIONS = {"up", "down", "sideways", "mixed"}
 MIN_CONFIDENCE_THRESHOLD = 0.4   # TopicMention.confidence filter
 TOP_K_SOURCES = 8                 # max sources sent to LLM per topic

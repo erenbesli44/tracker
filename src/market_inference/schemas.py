@@ -11,7 +11,8 @@ class InferenceSourceOut(BaseModel):
     video_id: int
     title: Optional[str] = None
     channel_name: Optional[str] = None
-    person_name: Optional[str] = None
+    person_name: Optional[str] = None  # speaker of the view (OI-018)
+    published_at: Optional[datetime] = None  # publish date, else when the video was added
     weight_used: float
     contribution_note: Optional[str] = None
 

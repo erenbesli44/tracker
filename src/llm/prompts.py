@@ -448,7 +448,7 @@ Konu Anahtari : {{topic_key}}
 Konu Basligi  : {{topic_label}}
 
 {{prev_section}}
-
+{{summary_rules}}
 YENI GELEN KAYNAKLAR
 ====================
 (Sadece bu yeni kaynakları değerlendir. Önceki çıkarımı başlangıç noktası olarak kullan.)
@@ -460,7 +460,7 @@ CIKTI JSON SEMASI
 {
   "direction": "up|down|sideways|mixed",
   "confidence": 0.0,
-  "summary": "2-3 Türkçe tam cümle. Piyasa beklentisini net açıkla.",
+  "summary": "2-3 Türkçe tam cümle (ÖZET YAZIM KURALLARI'na uy).",
   "tags": ["etiket1", "etiket2"],
   "changed_from_prev": false,
   "change_reason": null,
@@ -472,6 +472,30 @@ CIKTI JSON SEMASI
 changed_from_prev: Önceki çıkarım yoksa false. Yön veya güven 0.10+ değiştiyse true.
 change_reason: changed_from_prev=true ise doldur, aksi halde null.
 contributions: Bu çıkarımda kullanılan kaynakları listele.
+"""
+
+# Appended to every inference prompt: the summary is read on its own on the site.
+MARKET_INFERENCE_SUMMARY_RULES = """
+ÖZET YAZIM KURALLARI
+====================
+- Okur önceki çıkarımı ve kaynak listesini görmez. "Yeni kaynaklar", "önceki çıkarım",
+  "kaynakların çoğu", "[3] numaralı kaynak" gibi ifadeler kullanma; konunun kendisini anlat.
+- Bir yorumcunun görüşünü aktarırken kimin söylediğini adıyla yaz ("Atilla Yeşilada ... diyor");
+  yorumcu adını yalnızca "Konuşan" alanından al, "-" ise yorumcu adı verme. Haberdeki
+  aktörler (kurumlar, politikacılar) adıyla anılabilir.
+- Güven düzeyi veya kaynak ağırlığı gibi iç değerlendirme terimleri yazma.
+- Bu kurallar contributions[*].note için de geçerlidir.
+"""
+
+# Added for agenda topics (faiz, enflasyon, jeopolitik, iç siyaset): shown as context only.
+MARKET_INFERENCE_AGENDA_RULES = """\
+- Bu konu bir GÜNDEM özetidir, piyasa yönü tahmini değildir. Özette yön kelimesi kullanma
+  ("yükseliş/düşüş bekleniyor", "yukarı/aşağı yönlü", "olumlu/olumsuz görünüm" yok).
+  Ne olduğunu, ne konuşulduğunu ve yorumcuların hangi gelişmeleri izlediğini anlat.
+  Bir yorumcu açıkça bir rakam veya beklenti söylediyse onu kişiye atfederek aktar
+  ("X, yıl sonu enflasyonunun yüzde 30 civarında kalacağını söylüyor").
+- `direction` ve `confidence` alanlarını yine doldur (iç kullanım), ama özete ve notlara
+  yansıtma.
 """
 
 
