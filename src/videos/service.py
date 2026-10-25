@@ -11,7 +11,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 import yt_dlp
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -873,9 +873,10 @@ def delete_video(session: Session, video: Video) -> None:
         Transcript,
         VideoSummary,
     ):
-        for row in session.exec(select(model).where(model.video_id == video.id)).all():
-            session.delete(row)
-    session.delete(video)
+        # Explicit statements, children first: without ORM relationships the flush
+        # order is not guaranteed, and Postgres enforces the foreign keys.
+        session.exec(delete(model).where(model.video_id == video.id))
+    session.exec(delete(Video).where(Video.id == video.id))
     session.commit()
 
 

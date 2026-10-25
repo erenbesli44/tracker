@@ -98,3 +98,26 @@ async def test_delete_video_removes_it_and_its_transcript(client: AsyncClient):
     assert response.status_code == 204
     assert (await client.get(f"/videos/{video_id}")).status_code == 404
     assert (await client.delete(f"/videos/{video_id}")).status_code == 404
+
+
+async def test_delete_video_respects_foreign_keys(client: AsyncClient, session):
+    """Postgres enforces foreign keys; child rows must go before the video row."""
+    from sqlalchemy import text
+
+    created = await client.post(
+        "/ingestions/youtube",
+        json={
+            "person": {"name": "Taner Genek"},
+            "video": {"video_url": f"https://www.youtube.com/watch?v={UPLOAD_ID}"},
+            "transcript": {"raw_text": "metin", "language": "tr"},
+            "summary": {"short_summary": "kısa", "long_summary": "uzun"},
+        },
+    )
+    assert created.status_code in (200, 201), created.text
+    video_id = created.json()["video_id"]
+    session.exec(text("PRAGMA foreign_keys=ON"))
+
+    response = await client.delete(f"/videos/{video_id}")
+
+    assert response.status_code == 204
+    assert (await client.get(f"/videos/{video_id}")).status_code == 404
