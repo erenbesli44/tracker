@@ -23,6 +23,8 @@ class WatchedBroker(BaseModel):
     url: str
     enabled: bool = True
     notice_text: str | None = None
+    # isy_rss only: how many feed pages (?paged=N) discovery follows.
+    max_pages: int = Field(default=3, ge=1)
 
     @field_validator("url")
     @classmethod

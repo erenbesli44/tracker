@@ -17,6 +17,7 @@ dependencies = [
     "openai>=1.55.0",
     "tweepy>=4.14.0",
     "redis>=5.0.0",
+    "pypdf>=6.0.0",
 ]
 
 [project.optional-dependencies]

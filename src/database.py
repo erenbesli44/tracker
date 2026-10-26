@@ -216,6 +216,18 @@ def _ensure_post_rebuild_indexes(session: Session) -> None:
     )
 
 
+def _add_model_portfolio_snapshot_basis(session: Session) -> None:
+    """OI-027 step 2: snapshot basis (current | pre_change) on sqlite tables made by step 1."""
+    if _sqlite_has_column(session, "model_portfolio_snapshot", "basis"):
+        return
+    session.exec(
+        text(
+            "ALTER TABLE model_portfolio_snapshot ADD COLUMN basis "
+            "VARCHAR(12) NOT NULL DEFAULT 'current'"
+        )
+    )
+
+
 def _run_postgres_migrations(session: Session) -> None:
     """Add columns that exist in SQLModel models but not yet in the Postgres schema."""
     session.exec(
@@ -295,6 +307,12 @@ def _run_postgres_migrations(session: Session) -> None:
         )
     )
     session.exec(text("ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_tweet_ids VARCHAR"))
+    session.exec(
+        text(
+            "ALTER TABLE model_portfolio_snapshot ADD COLUMN IF NOT EXISTS basis "
+            "VARCHAR(12) NOT NULL DEFAULT 'current'"
+        )
+    )
     session.exec(
         text(
             """
@@ -674,6 +692,8 @@ def run_lightweight_migrations() -> None:
 
         if not _sqlite_has_column(session, "twitter_post", "thread_tweet_ids"):
             session.exec(text("ALTER TABLE twitter_post ADD COLUMN thread_tweet_ids VARCHAR"))
+
+        _add_model_portfolio_snapshot_basis(session)
 
         # Finalize migration: make legacy person references optional.
         video_person_not_null = _sqlite_is_not_null_column(session, "video", "person_id")

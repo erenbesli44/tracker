@@ -66,3 +66,20 @@ async def test_routes_require_api_key(client: AsyncClient):
         for path in ("health", "runs", "runs/1"):
             response = await anon.get(f"/jobs/broker-watch/{path}")
             assert response.status_code == 401, path
+
+
+async def test_health_verdict_is_partial_after_a_partial_run(client: AsyncClient, session: Session):
+    from tests.broker_watch.test_service import GEDIK_PAGE, TEXTS
+
+    engine = session.get_bind()
+    config = load_broker_config()
+    service.run_once(engine, config, fetcher=FakeFetcher(_default_docs()))  # all sources succeed
+    no_table = {**TEXTS, GEDIK_PAGE: "<html><body><p>Model Portföy</p></body></html>"}
+    service.run_once(engine, config, fetcher=FakeFetcher(_default_docs(), texts=no_table))
+
+    body = (await client.get("/jobs/broker-watch/health")).json()
+
+    assert body["verdict"] == "partial"
+    assert body["stale_sources"] == []
+    assert body["last_24h"]["runs_partial"] == 1
+    assert body["latest_run"]["status"] == "partial_fail"

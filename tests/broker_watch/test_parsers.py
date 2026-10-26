@@ -228,3 +228,46 @@ def test_is_known_ticker_uses_config_list():
     assert parsers.is_known_ticker("AKBNK")
     assert parsers.is_known_ticker("akbnk")
     assert not parsers.is_known_ticker("TCMB")
+
+
+# ── Step 2 residuals ──────────────────────────────────────────────────────────
+
+
+def test_yk_holdings_come_from_page_2_and_known_tickers_only():
+    page1 = "BIST 14.09.2026 raporu. 2026 16.01.2023"
+    assert parsers.parse_yk_json(page1, published_at=date(2026, 9, 14)).composition == []
+
+    page2 = "Şirket Kod Portföy Giriş Tarihi BIST 14.09.2026 Bim BIMAS 16.01.2023"
+    doc = parsers.parse_yk_json(page1 + "\f" + page2, published_at=date(2026, 9, 14))
+    assert [(h.ticker, h.entry_date) for h in doc.composition] == [("BIMAS", date(2023, 1, 16))]
+    assert any("unknown holding BIST" in w for w in doc.warnings)
+
+
+def test_yk_composition_basis_follows_the_table_title():
+    doc = parsers.parse_yk_json(fx.YK_14_SEP_TEXT, published_at=fx.YK_14_SEP_DATE)
+    assert doc.composition_basis == "pre_change"
+
+    current = fx.YK_14_SEP_TEXT.replace(" (değişiklikler öncesi)", "")
+    doc = parsers.parse_yk_json(current, published_at=fx.YK_14_SEP_DATE)
+    assert doc.composition_basis == "current" and len(doc.composition) == 3
+    assert parsers.parse_gedik_page(fx.GEDIK_22_SEP_TEXT).composition_basis == "current"
+
+
+def test_isy_weight_clause_naming_more_companies_than_tickers_is_flagged():
+    text = (
+        "Model Portföy Değişiklikler Garanti Bankası’nın ve Emlak GYO’nun ağırlığını "
+        "artırırken AKBNK ağırlığını azaltıyoruz. 20.10.2026"
+    )
+    doc = parsers.parse_isy_rss(text)
+    assert [(e.ticker, e.action) for e in doc.events] == [("AKBNK", "weight_down")]
+    assert doc.needs_review
+
+    # One company mapped (Tüpraş) but two named in the clause: flagged, event kept.
+    text = "Model Portföy Değişiklikler Tüpraş’ın ve Garanti’nin ağırlığını azaltıyoruz. 20.10.2026"
+    doc = parsers.parse_isy_rss(text)
+    assert [(e.ticker, e.action) for e in doc.events] == [("TUPRS", "weight_down")]
+    assert doc.needs_review and any("unmapped company" in w for w in doc.warnings)
+
+    # As many genitives as tickers: not flagged (the 1 Sep note has TCMB’nin + 3 tickers).
+    doc = parsers.parse_isy_rss(fx.ISY_1_SEP_TEXT, published_at=fx.ISY_1_SEP_DATE)
+    assert not doc.needs_review

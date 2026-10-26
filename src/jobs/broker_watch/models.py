@@ -76,6 +76,9 @@ class ModelPortfolioSnapshot(SQLModel, table=True):
     broker_id: int = Field(foreign_key="broker.id", index=True)
     document_id: int = Field(foreign_key="broker_document.id", index=True)
     as_of: date = Field(index=True)
+    # current: holdings as of as_of / pre_change: holdings before the changes announced
+    # in the same document (Yapı Kredi's page-2 table). Read by the consistency check.
+    basis: str = Field(default="current", max_length=12)
     # JSON array of {"ticker": str, "entry_date": "YYYY-MM-DD" | null}
     items_json: str = Field(default="[]")
     created_at: datetime = Field(default_factory=utc_now)
@@ -87,7 +90,7 @@ class BrokerWatchRun(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime | None = Field(default=None)
-    # running / success / partial_fail / failed
+    # running / success / partial_fail / failed / skipped_rate_limit
     status: str = Field(default="running", max_length=20)
     sources_scanned: int = Field(default=0)
     documents_new: int = Field(default=0)

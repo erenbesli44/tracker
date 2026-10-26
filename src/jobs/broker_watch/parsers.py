@@ -63,6 +63,9 @@ class ParsedDocument:
     # True when a rule saw a change it could not attribute (e.g. a weight clause
     # without a known ticker); the document must then be reviewed as a whole.
     needs_review: bool = False
+    # What ``composition`` describes: "current" holdings, or "pre_change" (the list
+    # before the changes announced in the same document, as in Yapı Kredi's page 2).
+    composition_basis: str = "current"
 
 
 # ── Ticker list ───────────────────────────────────────────────────────────────
@@ -230,6 +233,8 @@ _COMPANY_WEIGHT = {
     for name, ticker in COMPANY_TICKERS.items()
 }
 _UPPER_TOKEN = re.compile(r"\b[A-Z][A-Z0-9]{3,4}\b")
+# Any genitive after an apostrophe ("Garanti Bankası’nın", "GYO’nun"): one per company named.
+_GENITIVE = re.compile(r"[’']n?[ıiuü]n\b")
 
 
 def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocument:
@@ -265,7 +270,8 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
 def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str]]:
     """(ticker, action) pairs from weight sentences; each clause scopes its own tickers.
 
-    A clause that names no known ticker marks the whole document for review.
+    A clause that names no known ticker, or more companies (genitive forms) than
+    tickers it could map, marks the whole document for review.
     """
     changes: list[tuple[str, str]] = []
     for sentence in _SENTENCE_BREAK.split(body):
@@ -277,6 +283,9 @@ def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str]]
             tickers = _tickers_in(scope, doc.warnings)
             if not tickers:
                 doc.warnings.append(f"weight clause without a known ticker: {scope[:80]!r}")
+                doc.needs_review = True
+            elif len(_GENITIVE.findall(scope)) > len(tickers):
+                doc.warnings.append(f"weight clause names an unmapped company: {scope[:80]!r}")
                 doc.needs_review = True
             changes.extend((ticker, action) for ticker in tickers)
     return changes
@@ -314,12 +323,16 @@ _YK_TICKER = re.compile(r"\(([A-Z0-9]{4,5})\s+TI\b")
 _YK_RECOMMENDATION = re.compile(r"Öneri:\s*(AL|TUT|SAT)\b")
 _YK_TARGET = re.compile(r"Hedef Fiyat:\s*([\d.,]+)\s*TL\)?")
 _YK_HOLDING = re.compile(r"\b([A-Z0-9]{4,5})\s+(\d{2})\.(\d{2})\.(\d{4})\b")
+# Title of the page-2 table: the composition *before* the changes announced on page 1.
+_YK_PRE_CHANGE_TITLE = "değişiklikler öncesi"
 
 
 def parse_yk_json(text: str, *, published_at: date | None = None) -> ParsedDocument:
     """Yapı Kredi 'Model Portföy' PDF: change note on page 1, composition table on page 2.
 
     Event date = ``published_at`` (report post time), else the Turkish date in the text.
+    Holdings are read from page 2 onwards only (known tickers), with basis
+    ``pre_change`` when the table is titled "(değişiklikler öncesi)".
     """
     text = normalize_text(text)
     doc = ParsedDocument(text=text)
@@ -352,14 +365,20 @@ def parse_yk_json(text: str, *, published_at: date | None = None) -> ParsedDocum
         event.recommendation = recommendation.group(1) if recommendation else None
         event.target_price = _to_float(target.group(1)) if target else None
 
+    tables = text.split(PAGE_BREAK, 1)[1] if PAGE_BREAK in text else ""
     seen: set[str] = set()
-    for m in _YK_HOLDING.finditer(text):
+    for m in _YK_HOLDING.finditer(tables):
         ticker = m.group(1)
         if ticker in seen:
             continue
         seen.add(ticker)
+        if not is_known_ticker(ticker):
+            doc.warnings.append(f"skipped unknown holding {ticker}")
+            continue
         entry = _safe_date(int(m.group(4)), int(m.group(3)), int(m.group(2)))
         doc.composition.append(ParsedHolding(ticker=ticker, entry_date=entry))
+    if _YK_PRE_CHANGE_TITLE in tables:
+        doc.composition_basis = "pre_change"
 
     if not headers:
         doc.warnings.append("no 'Model portföyümüze/den ...' header found on page 1")

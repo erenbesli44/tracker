@@ -170,8 +170,10 @@ def pipeline_health(session: SessionDep) -> dict:
         verdict = "running"
     elif latest_run.status == "failed" or last_24h["runs_failed"] > 0:
         verdict = "degraded"
-    elif stale_sources or last_24h["runs_partial"] > 0:
+    elif stale_sources:
         verdict = "stale_sources"
+    elif last_24h["runs_partial"] > 0:
+        verdict = "partial"
     else:
         verdict = "healthy"
 
