@@ -1,0 +1,45 @@
+src/classification/quote_clean.py
+  s_87c794085cb1de::t_20b4e73e002c8a 1-85
+  s_87c794085cb1de::t_0100a632fc8c70 86-108
+tests/outlook/test_quote_clean.py
+  s_87c794085cb1de::t_e4dc0dd958890d 1-123
+  s_87c794085cb1de::t_3ea153fd835371 124
+src/classification/models.py
+  s_87c794085cb1de::t_27974c545daf47 39-41
+src/classification/outlook.py
+  s_87c794085cb1de::t_746e130f41e25d 24,28-29,189,207-213,223-252,432-512
+src/classification/outlook_router.py
+  s_87c794085cb1de::t_b0de69c08cb8f9 37-57
+src/database.py
+  s_87c794085cb1de::t_1d3df24f5fed19 258-260,672-673
+src/llm/prompts.py
+  s_87c794085cb1de::t_e2d359b09abff7 594-629
+src/llm/service.py
+  s_87c794085cb1de::t_a7fad1c36c555b 22,487-492
+src/timeline/schemas.py
+  s_87c794085cb1de::t_cdc7b215072a7d 31
+src/timeline/service.py
+  s_87c794085cb1de::t_3c11d87d37d7aa 102,271
+src/topics/schemas.py
+  s_87c794085cb1de::t_fd5094e1332290 51
+src/topics/service.py
+  s_87c794085cb1de::t_de2c4bfe430707 237
+tests/conftest.py
+  s_87c794085cb1de::t_8fca0b1f3bb560 60-61,68-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "72ddc1a0ac3ee96fc0e01cc2faaabb0cb3bcab3c",
+  "prompts": {},
+  "sessions": {
+    "s_87c794085cb1de": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7986e89d-27a9-4c09-aa2d-8f15b14376c1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
