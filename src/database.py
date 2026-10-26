@@ -256,6 +256,9 @@ def _run_postgres_migrations(session: Session) -> None:
         text("ALTER TABLE topic_mention ADD COLUMN IF NOT EXISTS outlook_version VARCHAR(20)")
     )
     session.exec(
+        text("ALTER TABLE topic_mention ADD COLUMN IF NOT EXISTS outlook_quote_clean VARCHAR")
+    )
+    session.exec(
         text(
             "ALTER TABLE video ADD COLUMN IF NOT EXISTS transcript_status "
             "VARCHAR(40) NOT NULL DEFAULT 'pending_transcript'"
@@ -666,6 +669,8 @@ def run_lightweight_migrations() -> None:
             session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook_quote VARCHAR"))
         if not _sqlite_has_column(session, "topic_mention", "outlook_version"):
             session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook_version VARCHAR(20)"))
+        if not _sqlite_has_column(session, "topic_mention", "outlook_quote_clean"):
+            session.exec(text("ALTER TABLE topic_mention ADD COLUMN outlook_quote_clean VARCHAR"))
 
         if not _sqlite_has_column(session, "twitter_post", "thread_length"):
             session.exec(

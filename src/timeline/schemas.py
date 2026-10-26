@@ -28,6 +28,7 @@ class TimelineEntry(CustomModel):
     outlook_explicit: Optional[bool] = None
     outlook_horizon: Optional[str] = None
     outlook_quote: Optional[str] = None
+    outlook_quote_clean: Optional[str] = None
 
 
 class TimelineResponse(CustomModel):

@@ -591,3 +591,39 @@ KURALLAR:
 
 ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
 {"participants":[{"name":"Ad Soyad","role":"host|guest","finance":true|false}]}"""
+
+
+# ---------------------------------------------------------------------------
+# Quote clean-up: the verbatim transcript quote made readable, same words.
+# ---------------------------------------------------------------------------
+
+QUOTE_CLEAN_PROMPT_VERSION = "quote-clean-v2"
+
+QUOTE_CLEAN_PROMPT_TEMPLATE = """Aşağıdaki cümleler YouTube konuşmalarının otomatik transkriptinden kelimesi kelimesine alınmıştır. Konuşma dili ve transkript hataları yüzünden bazıları düzgün bir cümle değildir. Her birini okunur bir Türkçe cümle hâline getir. Sonuç hâlâ konuşmacının KENDİ SÖZÜ olarak tırnak içinde gösterilecek; bu yüzden EN AZ değişikliği yap. Öncelik SİLMEK ve noktalamadır; kelime değiştirmek son çaredir.
+
+YAPABİLİRSİN:
+- Anlam taşımayan dolgu sözcüklerini sil: eee, ee, e, yani, işte, şey, falan, filan, şöyle, böyle, hani, açıkçası, aslında, hakikaten, arkadaşlar, bakın (anlama katkısı yoksa).
+- Tekrarları ve yarım bırakılıp yeniden başlanan kısımları sil ("ondan sonra ondan sonra" → "ondan sonra").
+- Noktalama ekle, cümle başını büyük harf yap.
+- Bir kelimeyi ancak transkript hatası %100 belli ise düzelt; emin değilsen kelimeye DOKUNMA.
+- Beklentiyle ilgisi olmayan, cümleyi bozan baş kısmı silebilirsin.
+
+YAPAMAZSIN:
+- Yön ve beklenti sözcüklerini silmek veya değiştirmek: yukarı, aşağı, yön, yükseliş, düşüş, artış, ralli, hedef, alım, satış, pozitif, negatif, olumlu, olumsuz, iyimser, kötümser, bekliyorum, düşünüyorum, çıkabilir, düşebilir...
+- Olumsuzluğu değiştirmek: değil, yok, hiç, -me/-ma/-mıyor ekleri olduğu gibi kalır.
+- Kesinlik derecesini değiştirmek ("yapabilir" → "yapacak" olmaz; "bekleriz", "düşünmüyorum" aynen kalır).
+- Rakamlara dokunmak: rakamları orijinalde yazıldığı gibi bırak, nokta/virgül ekleme veya silme ("4855" → "4855" kalır).
+- Bilgi, yorum veya gerekçe eklemek; özetlemek; kendi kelimelerinle yeniden yazmak; şahsı değiştirmek.
+En fazla 200 karakter. Cümle zaten okunur ise aynen döndür.
+
+ÖRNEKLER:
+- "Şimdi şöyle olacak, iyi olacak falan yani onları yine yapabilir. Piyasa iyi olacak diyebilirim." → "Piyasa iyi olacak diyebilirim."
+- "Ben 11.400'ün altında çok böyle uzun süre kalacağımızı açıkçası düşünmüyorum." → "Ben 11.400'ün altında uzun süre kalacağımızı düşünmüyorum."
+- "Ve ondan sonra ondan sonra eee düşüşlerin biteceğini düşünüyorum. Yani önümüzde bir ralli gelmesini bekliyorum" → "Ondan sonra düşüşlerin biteceğini düşünüyorum. Önümüzde bir ralli gelmesini bekliyorum."
+- "teknik olarak 4855 üzerinde kaldığı sürece yön yukarı potansiyel dolar TL hedefleri ekranda" → "Teknik olarak 4855 üzerinde kaldığı sürece yön yukarı, potansiyel Dolar/TL hedefleri ekranda."
+
+{{items}}
+
+ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
+{"items":[{"id":<sayı>,"clean":"düzgün cümle"}]}
+Girdideki her id için tam bir öğe döndür."""

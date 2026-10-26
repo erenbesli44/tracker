@@ -21,10 +21,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
+from src.classification import quote_clean
 from src.classification.models import TopicMention
 from src.llm import service as llm_service
 from src.llm.prompts import OUTLOOK_PROMPT_VERSION, PARTICIPANTS_PROMPT_VERSION
-from src.persons import detector, participants as participants_service
+from src.persons import detector
+from src.persons import participants as participants_service
 from src.persons.models import VideoParticipants
 from src.topics.models import Topic
 from src.videos import service as videos_service
@@ -184,6 +186,7 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
         items_block=build_items_block(items),
     )
     results = parse_outlook_items(payload, {m.id for m, _ in rows})
+    add_clean_quotes(results, items)
     speakers = parse_speakers(payload, {m.id for m, _ in rows})
     if participants is not None:
         for mid, fields in results.items():
@@ -201,7 +204,13 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
             if fields is None:
                 session.add(mention)
                 continue
-            for k in ("outlook", "outlook_explicit", "outlook_horizon", "outlook_quote"):
+            for k in (
+                "outlook",
+                "outlook_explicit",
+                "outlook_horizon",
+                "outlook_quote",
+                "outlook_quote_clean",
+            ):
                 setattr(mention, k, fields[k])
             mention.outlook_version = OUTLOOK_PROMPT_VERSION
             session.add(mention)
@@ -209,6 +218,36 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
             _clear_other_mention_persons(session, video.id, {m.id for m, _ in rows})
         session.commit()
     return results
+
+
+def add_clean_quotes(
+    results: dict[int, dict], items: list[tuple[TopicMention, str, str]]
+) -> None:
+    """Set outlook_quote_clean on each result. An LLM failure leaves it NULL for the backfill;
+    a rejected edit stores the verbatim quote (checked, nothing safe to change)."""
+    todo = [
+        {
+            "id": mention.id,
+            "quote": results[mention.id]["outlook_quote"],
+            "instrument": instrument,
+            "context": quote_clean.quote_context(results[mention.id]["outlook_quote"], excerpt),
+        }
+        for mention, instrument, excerpt in items
+        if results.get(mention.id, {}).get("outlook_quote")
+    ]
+    cleaned: dict[int, str | None] | None = {}
+    if todo:
+        try:
+            cleaned = quote_clean.clean_quotes(todo)
+        except Exception:  # noqa: BLE001 — clean-up is optional; classification stands
+            logger.warning("Quote clean-up failed", exc_info=True)
+            cleaned = None
+    for fields in results.values():
+        fields["outlook_quote_clean"] = None
+    if cleaned is None:
+        return
+    for item in todo:
+        results[item["id"]]["outlook_quote_clean"] = cleaned.get(item["id"]) or item["quote"]
 
 
 def parse_speakers(payload: dict[str, Any], mention_ids: set[int]) -> dict[int, str]:
@@ -388,6 +427,87 @@ def run_backfill(engine, *, limit: int, workers: int = 3) -> None:
             _state["running"] = False
             _state["finished_at"] = datetime.now(UTC).isoformat()
 
+
+
+_clean_lock = threading.Lock()
+_clean_state: dict = {"running": False}
+
+
+def clean_quote_state() -> dict:
+    with _clean_lock:
+        return dict(_clean_state)
+
+
+def clean_quote_coverage(session: Session) -> dict:
+    with_quote = select(func.count(TopicMention.id)).where(TopicMention.outlook_quote.is_not(None))
+    return {
+        "quotes": session.exec(with_quote).one(),
+        "cleaned": session.exec(
+            with_quote.where(TopicMention.outlook_quote_clean.is_not(None))
+        ).one(),
+    }
+
+
+def run_clean_quote_backfill(engine, *, limit: int) -> None:
+    """Clean up to `limit` stored quotes that have no clean version yet. Single-flight."""
+    with _clean_lock:
+        if _clean_state.get("running"):
+            return
+        _clean_state.clear()
+        _clean_state.update(
+            running=True, started_at=datetime.now(UTC).isoformat(), queued=0, done=0, failed=0,
+            last_error=None,
+        )
+    try:
+        with Session(engine) as session:
+            mentions = session.exec(
+                select(TopicMention, Topic)
+                .join(Topic, TopicMention.topic_id == Topic.id)
+                .where(TopicMention.outlook_quote.is_not(None))
+                .where(TopicMention.outlook_quote_clean.is_(None))
+                .order_by(TopicMention.id.desc())
+                .limit(limit)
+            ).all()
+            with _clean_lock:
+                _clean_state["queued"] = len(mentions)
+            segments_by_video: dict[int, list] = {}
+            items: list[tuple[TopicMention, str, str]] = []
+            for mention, topic in mentions:
+                if mention.video_id not in segments_by_video:
+                    transcript = session.exec(
+                        select(Transcript).where(Transcript.video_id == mention.video_id)
+                    ).first()
+                    segments_by_video[mention.video_id] = (
+                        videos_service.parse_transcript_segments(transcript.segments_json)
+                        if transcript
+                        else []
+                    )
+                excerpt = transcript_excerpt(
+                    segments_by_video[mention.video_id], mention.start_time, mention.end_time
+                )
+                items.append((mention, INSTRUMENTS.get(topic.slug, topic.name), excerpt))
+
+            for start in range(0, len(items), quote_clean.BATCH):
+                chunk = items[start : start + quote_clean.BATCH]
+                results = {m.id: {"outlook_quote": m.outlook_quote} for m, _, _ in chunk}
+                add_clean_quotes(results, chunk)
+                stored = 0
+                for mention, _, _ in chunk:
+                    value = results[mention.id]["outlook_quote_clean"]
+                    if value is not None:
+                        mention.outlook_quote_clean = value
+                        session.add(mention)
+                        stored += 1
+                session.commit()
+                with _clean_lock:
+                    _clean_state["done"] += stored
+                    _clean_state["failed"] += len(chunk) - stored
+                    if stored < len(chunk):
+                        _clean_state["last_error"] = f"LLM failed for chunk at {start}"
+    finally:
+        with _clean_lock:
+            _clean_state["running"] = False
+            _clean_state["finished_at"] = datetime.now(UTC).isoformat()
 
 
 def assign_channel_default_persons(session: Session) -> int:

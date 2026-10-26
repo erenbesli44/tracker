@@ -99,6 +99,7 @@ def get_topic_timeline(
             outlook_explicit=mention.outlook_explicit,
             outlook_horizon=mention.outlook_horizon,
             outlook_quote=mention.outlook_quote,
+            outlook_quote_clean=mention.outlook_quote_clean,
         )
         for mention, video in rows
     ]
@@ -267,6 +268,7 @@ def get_channel_topic_timeline(
             outlook_explicit=mention.outlook_explicit,
             outlook_horizon=mention.outlook_horizon,
             outlook_quote=mention.outlook_quote,
+            outlook_quote_clean=mention.outlook_quote_clean,
         )
         for mention, video in rows
     ]

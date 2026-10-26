@@ -234,6 +234,7 @@ def get_topic_opinions_by_channel(
                     outlook_explicit=mention.outlook_explicit,
                     outlook_horizon=mention.outlook_horizon,
                     outlook_quote=mention.outlook_quote,
+                    outlook_quote_clean=mention.outlook_quote_clean,
                     person_id=speaker.id if speaker else None,
                     person_name=speaker.name if speaker else None,
                     person_slug=speaker.slug if speaker else None,

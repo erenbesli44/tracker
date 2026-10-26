@@ -19,6 +19,7 @@ from src.llm.prompts import (
     MARKET_INFERENCE_SUMMARY_RULES,
     OUTLOOK_PROMPT_TEMPLATE,
     PARTICIPANTS_PROMPT_TEMPLATE,
+    QUOTE_CLEAN_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
 )
 
@@ -480,6 +481,12 @@ def generate_outlook_json(
             "items": items_block,
         },
     )
+    return _call_llm_json(prompt)
+
+
+def generate_quote_clean_json(*, items_block: str) -> dict[str, Any]:
+    """Lightly edited, readable versions of verbatim transcript quotes."""
+    prompt = _replace_placeholders(QUOTE_CLEAN_PROMPT_TEMPLATE, {"items": items_block})
     return _call_llm_json(prompt)
 
 

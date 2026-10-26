@@ -57,10 +57,14 @@ async def client_fixture(session: Session):
 
 @pytest.fixture(autouse=True)
 def no_live_check_network(monkeypatch):
-    """Keep tests offline: treat every video as a regular upload unless a test overrides it."""
+    """Keep tests offline: every video is a regular upload and quote clean-up returns
+    nothing (verbatim quote kept), unless a test overrides it."""
     from src.videos import service as videos_service
 
     from src.ingestion import service as ingestion_service
 
     monkeypatch.setattr(videos_service, "fetch_is_live_content", lambda _url: False)
     monkeypatch.setattr(ingestion_service, "_list_channel_stream_ids", lambda _cid: set())
+    from src.llm import service as llm_service
+
+    monkeypatch.setattr(llm_service, "generate_quote_clean_json", lambda **_kw: {"items": []})

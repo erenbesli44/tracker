@@ -36,5 +36,8 @@ class TopicMention(SQLModel, table=True):
     outlook_explicit: Optional[bool] = Field(default=None)
     outlook_horizon: Optional[str] = Field(default=None, max_length=80)
     outlook_quote: Optional[str] = Field(default=None)
+    # Readable edit of outlook_quote (src/classification/quote_clean.py); equals the
+    # verbatim quote when no safe edit was found. NULL = not cleaned yet.
+    outlook_quote_clean: Optional[str] = Field(default=None)
     outlook_version: Optional[str] = Field(default=None, max_length=20)
     created_at: datetime = Field(default_factory=utc_now)

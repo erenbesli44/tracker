@@ -34,3 +34,24 @@ def backfill_status(session: SessionDep) -> dict:
         "coverage": outlook.coverage(session),
         "attribution": outlook.attribution_coverage(session),
     }
+
+
+@router.post(
+    "/clean-quotes",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Write readable versions of stored outlook quotes in the background",
+)
+def start_clean_quotes(
+    background_tasks: BackgroundTasks,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 200,
+) -> dict:
+    state = outlook.clean_quote_state()
+    if state.get("running"):
+        return {"status": "already_running", **state}
+    background_tasks.add_task(outlook.run_clean_quote_backfill, engine, limit=limit)
+    return {"status": "accepted", "limit": limit}
+
+
+@router.get("/clean-quotes", summary="Quote clean-up progress and coverage")
+def clean_quotes_status(session: SessionDep) -> dict:
+    return {"run": outlook.clean_quote_state(), "coverage": outlook.clean_quote_coverage(session)}
