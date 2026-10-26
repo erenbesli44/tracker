@@ -115,3 +115,5 @@ class BrokerWatchSourceResult(SQLModel, table=True):
     snapshots_new: int = Field(default=0)
     errors_count: int = Field(default=0)
     error_detail: str | None = Field(default=None)
+    documents_skipped_robots: int = Field(default=0)  # robots.txt skips (also in errors_count)
+    events_flagged: int = Field(default=0)  # by the snapshot-consistency check

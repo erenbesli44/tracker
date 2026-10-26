@@ -216,16 +216,19 @@ def _ensure_post_rebuild_indexes(session: Session) -> None:
     )
 
 
-def _add_model_portfolio_snapshot_basis(session: Session) -> None:
-    """OI-027 step 2: snapshot basis (current | pre_change) on sqlite tables made by step 1."""
-    if _sqlite_has_column(session, "model_portfolio_snapshot", "basis"):
-        return
-    session.exec(
-        text(
-            "ALTER TABLE model_portfolio_snapshot ADD COLUMN basis "
-            "VARCHAR(12) NOT NULL DEFAULT 'current'"
-        )
-    )
+# OI-027 step 2 columns on broker watch tables created by step 1: (table, column, DDL).
+_BROKER_WATCH_STEP2_COLUMNS = (
+    ("model_portfolio_snapshot", "basis", "VARCHAR(12) NOT NULL DEFAULT 'current'"),
+    ("broker_watch_source_result", "documents_skipped_robots", "INTEGER NOT NULL DEFAULT 0"),
+    ("broker_watch_source_result", "events_flagged", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def _add_broker_watch_step2_columns(session: Session) -> None:
+    """sqlite: add the OI-027 step 2 columns where a step 1 deployment lacks them."""
+    for table, column, ddl in _BROKER_WATCH_STEP2_COLUMNS:
+        if not _sqlite_has_column(session, table, column):
+            session.exec(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
 def _run_postgres_migrations(session: Session) -> None:
@@ -307,12 +310,8 @@ def _run_postgres_migrations(session: Session) -> None:
         )
     )
     session.exec(text("ALTER TABLE twitter_post ADD COLUMN IF NOT EXISTS thread_tweet_ids VARCHAR"))
-    session.exec(
-        text(
-            "ALTER TABLE model_portfolio_snapshot ADD COLUMN IF NOT EXISTS basis "
-            "VARCHAR(12) NOT NULL DEFAULT 'current'"
-        )
-    )
+    for table, column, ddl in _BROKER_WATCH_STEP2_COLUMNS:
+        session.exec(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}"))
     session.exec(
         text(
             """
@@ -693,7 +692,7 @@ def run_lightweight_migrations() -> None:
         if not _sqlite_has_column(session, "twitter_post", "thread_tweet_ids"):
             session.exec(text("ALTER TABLE twitter_post ADD COLUMN thread_tweet_ids VARCHAR"))
 
-        _add_model_portfolio_snapshot_basis(session)
+        _add_broker_watch_step2_columns(session)
 
         # Finalize migration: make legacy person references optional.
         video_person_not_null = _sqlite_is_not_null_column(session, "video", "person_id")

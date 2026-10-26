@@ -66,6 +66,9 @@ class ParsedDocument:
     # What ``composition`` describes: "current" holdings, or "pre_change" (the list
     # before the changes announced in the same document, as in Yapı Kredi's page 2).
     composition_basis: str = "current"
+    # Date printed in the document (Yapı Kredi: first Turkish date on page 1); the
+    # snapshot's ``as_of`` when the source gives no publication date.
+    document_date: date | None = None
 
 
 # ── Ticker list ───────────────────────────────────────────────────────────────
@@ -102,6 +105,16 @@ def html_to_text(markup: str) -> str:
     markup = re.sub(r"<(script|style)\b.*?</\1>", " ", markup, flags=re.S | re.I)
     markup = re.sub(r"<[^>]+>", " ", markup)
     return normalize_text(html.unescape(markup))
+
+
+def _loose(phrase: str) -> str:
+    """Regex for ``phrase`` tolerating a stray space inside each word.
+
+    pypdf's plain extraction splits words at glyph-positioning boundaries in some
+    PDFs ('ağ ırlığını', 'h edef' in İş Yatırım's 1 Sep 2026 note); the keyword
+    patterns must still match, and quotes stay verbatim from the stored text.
+    """
+    return " ".join(" ?".join(re.escape(char) for char in word) for word in phrase.split())
 
 
 def page_of(text: str, position: int) -> int:
@@ -211,25 +224,31 @@ def _add_event(
 
 # ── İş Yatırım ────────────────────────────────────────────────────────────────
 
-_ISY_HEADING = "Model Portföy Değişiklikler"
-_ISY_ADDED = re.compile(r"Eklenen Şirket\s+([A-Z0-9]{4,5})\.IS")
-_ISY_REMOVED = re.compile(r"Çıkartılan Şirket\s+([A-Z0-9]{4,5})\.IS")
+_ISY_HEADING = re.compile(_loose("Model Portföy Değişiklikler"))
+_ISY_ADDED = re.compile(_loose("Eklenen Şirket") + r"\s+([A-Z0-9]{4,5})\.IS")
+_ISY_REMOVED = re.compile(_loose("Çıkartılan Şirket") + r"\s+([A-Z0-9]{4,5})\.IS")
 _ISY_BODY_END = re.compile(
-    r"\s(?:Eklenen Şirket|Çıkartılan Şirket|En Çok Önerilenler Listesinde)\b"
+    r"\s(?:"
+    + "|".join(
+        _loose(p) for p in ("Eklenen Şirket", "Çıkartılan Şirket", "En Çok Önerilenler Listesinde")
+    )
+    + r")\b"
 )
 _ISY_TICKER_LABEL = re.compile(r"^(?:[A-Z0-9]{4,5}\.IS\s*(?:&|,|ve)?\s*)+:\s*")
 # Weight sentences: "<X> ağırlığını %7'ye indirirken", "... ağırlıklarını artırıyoruz";
 # the verb stem decides the direction. "ağrılığını" is the broker's own typo.
-_WEIGHT_NOUN = r"ağ(?:ırlığ|rılığ|ırlıklar)ını"
+_WEIGHT_NOUN_FORMS = ("ağırlığını", "ağrılığını", "ağırlıklarını")
+_WEIGHT_NOUN = "(?:" + "|".join(_loose(n) for n in _WEIGHT_NOUN_FORMS) + ")"
+_WEIGHT_VERB_STEMS = ("indir", "azalt", "düşür", "çek", "artır", "arttır", "yükselt")
 _WEIGHT_CLAUSE = re.compile(
-    _WEIGHT_NOUN + r"\s[^;.]{0,60}?\b(indir|azalt|düşür|çek|artır|arttır|yükselt)"
+    _WEIGHT_NOUN + r"\s[^;.]{0,60}?\b(" + "|".join(_loose(v) for v in _WEIGHT_VERB_STEMS) + ")"
 )
 _WEIGHT_DOWN_STEMS = ("indir", "azalt", "düşür", "çek")
 # A company name counts only in the genitive right before the weight noun
 # ("Tüpraş’ın portföydeki ağırlığını"); other cases ("Akbank'a", "Akbank'tan") do not.
 _GENITIVE_BEFORE_WEIGHT = r"[’']n?[ıiuü]n\s+(?:\S+\s+){0,2}" + _WEIGHT_NOUN
 _COMPANY_WEIGHT = {
-    ticker: re.compile(re.escape(name) + _GENITIVE_BEFORE_WEIGHT)
+    ticker: re.compile(_loose(name) + _GENITIVE_BEFORE_WEIGHT)
     for name, ticker in COMPANY_TICKERS.items()
 }
 _UPPER_TOKEN = re.compile(r"\b[A-Z][A-Z0-9]{3,4}\b")
@@ -249,8 +268,8 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
     page1 = text.split(PAGE_BREAK, 1)[0]
     event_date = published_at or first_dotted_date(page1)
 
-    heading = page1.find(_ISY_HEADING)
-    body = page1[heading + len(_ISY_HEADING) :] if heading >= 0 else page1
+    heading = _ISY_HEADING.search(page1)
+    body = page1[heading.end() :] if heading else page1
     body = _ISY_BODY_END.split(body, maxsplit=1)[0]
     body = _ISY_TICKER_LABEL.sub("", body.strip())
     quote = build_quote(body)
@@ -279,7 +298,8 @@ def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str]]
         for m in _WEIGHT_CLAUSE.finditer(sentence):
             scope = sentence[start : m.end()]
             start = m.end()
-            action = WEIGHT_DOWN if m.group(1) in _WEIGHT_DOWN_STEMS else WEIGHT_UP
+            stem = m.group(1).replace(" ", "")
+            action = WEIGHT_DOWN if stem in _WEIGHT_DOWN_STEMS else WEIGHT_UP
             tickers = _tickers_in(scope, doc.warnings)
             if not tickers:
                 doc.warnings.append(f"weight clause without a known ticker: {scope[:80]!r}")
@@ -337,7 +357,8 @@ def parse_yk_json(text: str, *, published_at: date | None = None) -> ParsedDocum
     text = normalize_text(text)
     doc = ParsedDocument(text=text)
     page1 = text.split(PAGE_BREAK, 1)[0]
-    event_date = published_at or first_turkish_date(page1)
+    doc.document_date = first_turkish_date(page1)
+    event_date = published_at or doc.document_date
 
     headers = list(_YK_HEADER.finditer(page1))
     for i, m in enumerate(headers):
@@ -379,6 +400,10 @@ def parse_yk_json(text: str, *, published_at: date | None = None) -> ParsedDocum
         doc.composition.append(ParsedHolding(ticker=ticker, entry_date=entry))
     if _YK_PRE_CHANGE_TITLE in tables:
         doc.composition_basis = "pre_change"
+    elif doc.composition:
+        doc.warnings.append(
+            f"composition table without the '({_YK_PRE_CHANGE_TITLE})' title: basis current"
+        )
 
     if not headers:
         doc.warnings.append("no 'Model portföyümüze/den ...' header found on page 1")
@@ -387,7 +412,9 @@ def parse_yk_json(text: str, *, published_at: date | None = None) -> ParsedDocum
 
 # ── Gedik Yatırım ─────────────────────────────────────────────────────────────
 
-_GEDIK_HEADER = re.compile(r"\(([A-Z0-9]{3,6})\)\s*(çıkarıyoruz|ekliyoruz)\s*:")
+_GEDIK_HEADER = re.compile(
+    r"\(([A-Z0-9]{3,6})\)\s*(" + _loose("çıkarıyoruz") + "|" + _loose("ekliyoruz") + r")\s*:"
+)
 _GEDIK_TABLE_HEAD = re.compile(
     r"Şirket Adı\s+Hisse Kodu\s+Hedef Fiyat\s+Potansiyel Getiri\s+BIST-100 Ağırlık \(%\)"
 )
@@ -409,7 +436,7 @@ def parse_gedik_page(text: str, *, published_at: date | None = None) -> ParsedDo
     for i, m in enumerate(headers):
         # The next header's company name trails this body; build_quote drops that fragment.
         end = headers[i + 1].start() if i + 1 < len(headers) else len(page1)
-        action = REMOVED if m.group(2) == "çıkarıyoruz" else ADDED
+        action = REMOVED if m.group(2).replace(" ", "") == "çıkarıyoruz" else ADDED
         _add_event(doc, m.group(1), action, event_date, build_quote(page1[m.end() : end]))
 
     if not headers:

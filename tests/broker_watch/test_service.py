@@ -333,6 +333,19 @@ def test_consistency_check_flags_events_contradicted_by_next_current_snapshot(se
     assert service.check_snapshot_consistency(session, broker.id) == 0  # already flagged
 
 
+def test_consistency_check_ignores_same_day_current_snapshot(session: Session):
+    broker, document = _seed(session)
+    event = _event(session, broker, document, "ASTOR", "added", date(2026, 9, 22))
+    _snapshot(session, broker, document, date(2026, 9, 22), ["AKSA"])  # same day: no evidence
+
+    assert service.check_snapshot_consistency(session, broker.id) == 0
+    session.refresh(event)
+    assert event.review_status == "auto"
+
+    _snapshot(session, broker, document, date(2026, 9, 23), ["AKSA"])  # strictly later: evidence
+    assert service.check_snapshot_consistency(session, broker.id) == 1
+
+
 def test_consistency_check_leaves_events_without_later_snapshot_alone(session: Session):
     broker, document = _seed(session)
     event = _event(session, broker, document, "ASTOR", "added", date(2026, 9, 22))
@@ -362,6 +375,21 @@ def test_run_once_flags_added_ticker_missing_from_composition(session: Session):
     assert events["TUPRS"].review_status == "auto"
     document = session.get(BrokerDocument, events["ASTOR"].document_id)
     assert document.parse_status == "needs_review" and "consistency: ASTOR" in document.parse_error
+    stored = session.exec(select(BrokerWatchSourceResult)).one()
+    assert (stored.events_flagged, stored.documents_skipped_robots) == (1, 0)
+
+
+def test_yk_snapshot_as_of_falls_back_to_the_document_date(session: Session):
+    undated = _doc(CHANGE_NOTE, YK_14_SEP.file_url)  # no reportPostTime in the listing
+    texts = {**TEXTS, undated: fx.YK_14_SEP_TEXT}
+    fetcher = FakeFetcher({"yapi-kredi-yatirim": [undated]}, texts=texts)
+
+    service.run_once(session.get_bind(), _one_broker_config("yapi-kredi-yatirim"), fetcher=fetcher)
+
+    snapshot = session.exec(select(ModelPortfolioSnapshot)).one()
+    assert (snapshot.as_of, snapshot.basis) == (date(2026, 9, 14), "pre_change")
+    event = session.exec(select(ModelPortfolioEvent)).one()
+    assert (event.event_date, event.review_status) == (date(2026, 9, 14), "auto")
 
 
 def test_run_once_counts_robots_skips_in_source_result(session: Session):
@@ -382,7 +410,33 @@ def test_run_once_counts_robots_skips_in_source_result(session: Session):
     assert summary.status == "partial_fail"
     stored = session.exec(select(BrokerWatchSourceResult)).one()
     assert stored.errors_count == 2 and stored.error_detail.startswith("robots.txt disallows")
+    assert (stored.documents_skipped_robots, stored.events_flagged) == (2, 0)
     assert fx.GEDIK_PDF_22_SEP not in site.urls() and fx.GEDIK_PDF_6_AUG not in site.urls()
+
+
+def test_run_once_counts_redirect_to_disallowed_path_as_robots_skip(session: Session):
+    site = FakeSites()
+    site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML)
+    site.add("https://cdn.gedik.com/robots.txt", "User-agent: *\nDisallow: /private/\n")
+    moved = "https://cdn.gedik.com/private/ModelPortfoyGuncellemesi_22_09_2026.pdf"
+    site.add(fx.GEDIK_PDF_22_SEP, "", status=302, headers={"Location": moved})
+    site.add(fx.GEDIK_PDF_6_AUG, fx.minimal_pdf(["Anadolu Hayat (ANHYT) cikariyoruz: Sebep."]))
+
+    with site.fetcher() as fetcher:
+        summary = service.run_once(
+            session.get_bind(), _one_broker_config("gedik-yatirim"), fetcher=fetcher
+        )
+
+    result = summary.sources[0]
+    assert (result.documents_seen, result.documents_new, result.documents_skipped_robots) == (
+        3,
+        2,
+        1,
+    )
+    assert result.status == "partial" and result.error_detail == f"robots.txt disallows {moved}"
+    assert moved not in site.urls()
+    stored = session.exec(select(BrokerWatchSourceResult)).one()
+    assert stored.documents_skipped_robots == 1
 
 
 def test_run_once_closes_the_http_fetcher_it_creates(session: Session, monkeypatch):

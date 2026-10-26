@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
-from sqlalchemy import Engine, func
+from sqlalchemy import Engine, and_, func, or_
 from sqlmodel import Session, select
 
 from src.jobs.broker_watch import parsers
@@ -137,6 +137,8 @@ def _run_once(engine: Engine, config: BrokerWatchConfig, fetcher: SourceFetcher)
                     snapshots_new=result.snapshots_new,
                     errors_count=result.errors_count,
                     error_detail=result.error_detail,
+                    documents_skipped_robots=result.documents_skipped_robots,
+                    events_flagged=result.events_flagged,
                 )
             )
             session.commit()
@@ -368,7 +370,7 @@ def _store_document(
             ModelPortfolioSnapshot(
                 broker_id=broker.id,
                 document_id=document.id,
-                as_of=doc.published_at or today,
+                as_of=doc.published_at or parsed.document_date or today,
                 basis=parsed.composition_basis,
                 items_json=json.dumps(items),
             )
@@ -381,12 +383,14 @@ def _store_document(
 
 def check_snapshot_consistency(session: Session, broker_id: int) -> int:
     """Plan criterion D: an ``auto`` added/removed event must agree with the broker's
-    first snapshot dated on or after the event; otherwise it becomes ``needs_review``.
+    next snapshot; otherwise it becomes ``needs_review``.
 
-    A ``current`` snapshot lists an added ticker and not a removed one. A ``pre_change``
-    snapshot of the event's own date (Yapı Kredi's page-2 table) is the opposite: the
-    removed ticker is still listed and the added one not yet. Weight events and events
-    without a later snapshot are left alone. Returns the number of events flagged.
+    Evidence is the first ``current`` snapshot strictly after the event date (a
+    same-day current table may predate the change), which must list an added ticker
+    and not a removed one; or a ``pre_change`` snapshot (Yapı Kredi's page-2 table)
+    dated on or after the event -- on the event's own day it is the opposite: the
+    removed ticker is still listed and the added one not yet. Weight events and
+    events without such a snapshot are left alone. Returns the number flagged.
     """
     events = session.exec(
         select(ModelPortfolioEvent).where(
@@ -401,7 +405,13 @@ def check_snapshot_consistency(session: Session, broker_id: int) -> int:
             select(ModelPortfolioSnapshot)
             .where(
                 ModelPortfolioSnapshot.broker_id == broker_id,
-                ModelPortfolioSnapshot.as_of >= event.event_date,
+                or_(
+                    ModelPortfolioSnapshot.as_of > event.event_date,
+                    and_(
+                        ModelPortfolioSnapshot.as_of == event.event_date,
+                        ModelPortfolioSnapshot.basis == "pre_change",
+                    ),
+                ),
             )
             .order_by(ModelPortfolioSnapshot.as_of, ModelPortfolioSnapshot.id)
         ).first()

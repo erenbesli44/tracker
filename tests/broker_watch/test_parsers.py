@@ -233,6 +233,39 @@ def test_is_known_ticker_uses_config_list():
 # ── Step 2 residuals ──────────────────────────────────────────────────────────
 
 
+def test_isy_weight_sentence_survives_pypdf_split_words():
+    # pypdf splits words at glyph-positioning points in the real 1 Sep PDF ('i ndirim',
+    # 'ağ ırlığını', 'h edef'); the feed excerpt used as fixture does not.
+    text = (
+        fx.ISY_1_SEP_TEXT.replace("hedef", "h edef")
+        .replace("faiz indirim", "faiz i ndirim")
+        .replace("ENJSA ağırlığını", "ENJSA ağ ırlığını")
+    )
+    doc = parsers.parse_isy_rss(text, published_at=fx.ISY_1_SEP_DATE)
+
+    assert [(e.ticker, e.action) for e in doc.events] == [
+        ("TUPRS", "weight_down"),
+        ("AKBNK", "weight_up"),
+        ("GARAN", "weight_up"),
+        ("ENJSA", "weight_up"),
+    ]
+    assert not doc.needs_review
+    _assert_quotes_ok(doc, text)
+
+
+def test_isy_and_gedik_headers_tolerate_split_words():
+    text = fx.ISY_20_OCT_TEXT.replace("Eklenen Şirket", "Ekle nen Şirket").replace(
+        "Model Portföy Değişiklikler", "Model Portf öy Değişiklikler"
+    )
+    doc = parsers.parse_isy_rss(text, published_at=fx.ISY_20_OCT_DATE)
+    assert [(e.ticker, e.action) for e in doc.events] == [("SAHOL", "added"), ("AKBNK", "removed")]
+    assert doc.events[0].reason_quote.endswith("devam ediyoruz.")  # body cut before the label
+
+    gedik = fx.GEDIK_22_SEP_TEXT.replace("(TUPRS) çıkarıyoruz:", "(TUPRS) çıkarı yoruz:")
+    doc = parsers.parse_gedik_page(gedik)
+    assert [(e.ticker, e.action) for e in doc.events] == [("TUPRS", "removed"), ("ASTOR", "added")]
+
+
 def test_yk_holdings_come_from_page_2_and_known_tickers_only():
     page1 = "BIST 14.09.2026 raporu. 2026 16.01.2023"
     assert parsers.parse_yk_json(page1, published_at=date(2026, 9, 14)).composition == []
@@ -250,7 +283,15 @@ def test_yk_composition_basis_follows_the_table_title():
     current = fx.YK_14_SEP_TEXT.replace(" (değişiklikler öncesi)", "")
     doc = parsers.parse_yk_json(current, published_at=fx.YK_14_SEP_DATE)
     assert doc.composition_basis == "current" and len(doc.composition) == 3
+    assert any("without the '(değişiklikler öncesi)' title" in w for w in doc.warnings)
     assert parsers.parse_gedik_page(fx.GEDIK_22_SEP_TEXT).composition_basis == "current"
+
+
+def test_yk_document_date_is_the_first_turkish_date_on_page_1():
+    assert parsers.parse_yk_json(fx.YK_14_SEP_TEXT).document_date == date(2026, 9, 14)
+    doc = parsers.parse_yk_json(fx.YK_14_SEP_TEXT, published_at=date(2026, 9, 15))
+    assert (doc.document_date, doc.events[0].event_date) == (date(2026, 9, 14), date(2026, 9, 15))
+    assert parsers.parse_gedik_page(fx.GEDIK_22_SEP_TEXT).document_date is None
 
 
 def test_isy_weight_clause_naming_more_companies_than_tickers_is_flagged():

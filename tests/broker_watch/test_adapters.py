@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pypdf.errors import PdfReadError
 
-from src.jobs.broker_watch import parsers
+from src.jobs.broker_watch import adapters, parsers
 from src.jobs.broker_watch.adapters import (
     CHANGE_NOTE,
     COMPOSITION,
@@ -141,6 +141,34 @@ def test_isy_discover_stops_at_max_pages():
     assert site.urls() == ["https://arastirma.isyatirim.com.tr/robots.txt", fx.ISY_FEED_URL]
 
 
+def test_isy_discover_keeps_page_1_when_page_2_is_not_a_feed(caplog):
+    site = FakeSites()
+    site.add(fx.ISY_FEED_URL, fx.ISY_FEED_PAGE_1)
+    not_xml = "<!DOCTYPE html><html><body><p>Sayfa bulunamadı<br></body></html>"
+    site.add(f"{fx.ISY_FEED_URL}?paged=2", not_xml)
+
+    with site.fetcher() as fetcher:
+        docs = fetcher.discover(BROKERS["is-yatirim"])
+
+    assert [d.file_url for d in docs] == [fx.ISY_PDF_20_OCT, fx.ISY_PDF_1_SEP]
+    assert f"{fx.ISY_FEED_URL}?paged=3" not in site.urls()
+    assert "İş feed page 2 skipped (ParseError" in caplog.text
+
+
+def test_fetch_refuses_files_above_the_size_cap(monkeypatch):
+    site = FakeSites()
+    doc = DiscoveredDocument(CHANGE_NOTE, fx.ISY_FEED_URL, fx.ISY_PDF_20_OCT, date(2026, 10, 20))
+    too_big = {"Content-Length": str(adapters.MAX_PDF_BYTES + 1)}
+    site.add(fx.ISY_PDF_20_OCT, b"%PDF-1.4", headers=too_big)  # declared size above the cap
+    with site.fetcher() as fetcher, pytest.raises(ValueError, match="too large"):
+        fetcher.fetch(BROKERS["is-yatirim"], doc)
+
+    monkeypatch.setattr(adapters, "MAX_PDF_BYTES", 10)  # actual body above the cap
+    site.add(fx.ISY_PDF_20_OCT, fx.minimal_pdf(["x"]))
+    with site.fetcher() as fetcher, pytest.raises(ValueError, match="too large"):
+        fetcher.fetch(BROKERS["is-yatirim"], doc)
+
+
 def test_isy_fetch_downloads_pdf_and_extracts_text():
     pdf = fx.minimal_pdf(["Eklenen Sirket SAHOL.IS", "Sayfa iki"])
     site = FakeSites()
@@ -250,10 +278,13 @@ def test_fetcher_closes_its_client():
 # ── robots.txt ────────────────────────────────────────────────────────────────
 
 
-def test_robots_disallow_skips_pdfs_and_is_fetched_once_per_host():
+@pytest.mark.parametrize(
+    "rule", ["Disallow: /media/", "Disallow: /*.pdf$", "Disallow: /media/*.pdf$"]
+)
+def test_robots_disallow_skips_pdfs_and_is_fetched_once_per_host(rule):
     site = FakeSites()
     site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML)
-    site.add("https://cdn.gedik.com/robots.txt", "User-agent: *\nDisallow: /media/\n")
+    site.add("https://cdn.gedik.com/robots.txt", f"User-agent: *\n{rule}\n")
     site.add(fx.GEDIK_PDF_22_SEP, fx.minimal_pdf(["x"]))
     broker = BROKERS["gedik-yatirim"]
 
@@ -283,18 +314,46 @@ def test_robots_disallow_for_our_agent_blocks_discovery():
     assert fx.ISY_FEED_URL not in site.urls()
 
 
-@pytest.mark.parametrize("robots", ["missing", "server_error", "unreachable"])
-def test_robots_missing_or_unreachable_allows_fetching(robots, caplog):
+def test_robots_applies_to_redirect_hops():
     site = FakeSites()
+    site.add("https://cdn.gedik.com/robots.txt", "User-agent: *\nDisallow: /private/\n")
+    moved = "https://cdn.gedik.com/private/ModelPortfoyGuncellemesi_22_09_2026.pdf"
+    site.add(fx.GEDIK_PDF_22_SEP, "", status=302, headers={"Location": moved})
+    site.add(moved, fx.minimal_pdf(["x"]))
+    doc = DiscoveredDocument(CHANGE_NOTE, fx.GEDIK_PAGE_URL, fx.GEDIK_PDF_22_SEP, date(2026, 9, 22))
+
+    with site.fetcher() as fetcher, pytest.raises(RobotsDisallowed, match="/private/"):
+        fetcher.fetch(BROKERS["gedik-yatirim"], doc)
+
+    assert site.urls() == ["https://cdn.gedik.com/robots.txt", fx.GEDIK_PDF_22_SEP]
+
+
+def test_robots_missing_allows_fetching(caplog):
+    site = FakeSites()  # no robots.txt route: 404
     site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML)
-    if robots == "server_error":
-        site.add("https://gedik.com/robots.txt", "boom", status=500)
-    elif robots == "unreachable":
-        site.failing.add("https://gedik.com/robots.txt")
 
     with site.fetcher() as fetcher:
         docs = fetcher.discover(BROKERS["gedik-yatirim"])
 
     assert docs[0].kind == COMPOSITION
     assert site.urls() == ["https://gedik.com/robots.txt", fx.GEDIK_PAGE_URL]
-    assert ("assuming allowed" in caplog.text) == (robots != "missing")
+    assert "disallowing" not in caplog.text
+
+
+@pytest.mark.parametrize("robots", ["server_error", "unreachable"])
+def test_robots_server_error_or_unreachable_disallows_the_host_this_run(robots, caplog):
+    site = FakeSites()
+    site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML)
+    if robots == "server_error":
+        site.add("https://gedik.com/robots.txt", "boom", status=500)
+    else:
+        site.failing.add("https://gedik.com/robots.txt")
+
+    with site.fetcher() as fetcher:
+        with pytest.raises(RobotsDisallowed):
+            fetcher.discover(BROKERS["gedik-yatirim"])
+        with pytest.raises(RobotsDisallowed):  # cached for the run: robots.txt not retried
+            fetcher.discover(BROKERS["gedik-yatirim"])
+
+    assert site.urls() == ["https://gedik.com/robots.txt"]
+    assert "disallowing the host this run" in caplog.text

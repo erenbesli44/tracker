@@ -60,6 +60,8 @@ def _serialize_source_result(row: BrokerWatchSourceResult) -> dict:
         "snapshots_new": row.snapshots_new,
         "errors_count": row.errors_count,
         "error_detail": row.error_detail,
+        "documents_skipped_robots": row.documents_skipped_robots,
+        "events_flagged": row.events_flagged,
     }
 
 
@@ -94,7 +96,8 @@ def pipeline_health(session: SessionDep) -> dict:
     """Single-shot diagnostic for the broker watch job.
 
     ``stale_sources`` lists enabled brokers without a successful fetch in the
-    last 7 days (plan criterion E); the daily reliability check reads it.
+    last 7 days (plan criterion E); the daily reliability check reads it. Each
+    source also carries the audit counters of its most recent scan.
     """
     now = utc_now()
     since_24h = now - timedelta(hours=24)
@@ -116,6 +119,7 @@ def pipeline_health(session: SessionDep) -> dict:
         "runs_success": status_counts.get("success", 0),
         "runs_partial": status_counts.get("partial_fail", 0),
         "runs_failed": status_counts.get("failed", 0),
+        "runs_skipped": status_counts.get("skipped_rate_limit", 0),
         "documents_new": sum(r.documents_new for r in runs_24h),
         "events_new": sum(r.events_new for r in runs_24h),
         "errors_count": sum(r.errors_count for r in runs_24h),
@@ -132,6 +136,17 @@ def pipeline_health(session: SessionDep) -> dict:
             .group_by(BrokerWatchSourceResult.broker_slug)
         ).all()
     )
+
+    # Most recent source result per broker (audit counters of the last scan).
+    latest_ids = select(func.max(BrokerWatchSourceResult.id)).group_by(
+        BrokerWatchSourceResult.broker_slug
+    )
+    latest_results = {
+        r.broker_slug: r
+        for r in session.exec(
+            select(BrokerWatchSourceResult).where(BrokerWatchSourceResult.id.in_(latest_ids))
+        ).all()
+    }
 
     try:
         config = load_broker_config()
@@ -154,6 +169,12 @@ def pipeline_health(session: SessionDep) -> dict:
             "adapter": b.adapter,
             "enabled": b.enabled,
             "last_success_at": last_success.get(b.slug),
+            "documents_skipped_robots": (
+                latest_results[b.slug].documents_skipped_robots if b.slug in latest_results else 0
+            ),
+            "events_flagged": (
+                latest_results[b.slug].events_flagged if b.slug in latest_results else 0
+            ),
         }
         for b in brokers
     ]

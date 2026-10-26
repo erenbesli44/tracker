@@ -5,8 +5,10 @@ Network only; parsing lives in ``parsers.py``. ``HttpFetcher`` is the production
 with the same two methods, and never touch the network. Parsers expect PDF pages
 joined with form feeds (``\\f``), which ``pdf_to_text`` produces.
 
-robots.txt is fetched once per host and run and honoured for the configured
-User-Agent (plan criterion F); a missing or unreachable robots.txt allows.
+robots.txt is fetched once per host and run and applied to every outgoing request
+(redirect hops and POSTs included) for the configured User-Agent, with ``*``/``$``
+wildcards (plan criterion F). A missing robots.txt (4xx) allows; an unreachable one
+or a 5xx disallows the host for this run (RFC 9309 §2.3.1.4).
 """
 
 import hashlib
@@ -18,7 +20,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 from urllib.parse import urlencode, urlsplit
-from urllib.robotparser import RobotFileParser
 from xml.etree import ElementTree
 
 import httpx
@@ -26,11 +27,13 @@ from pypdf import PdfReader
 
 from src.jobs.broker_watch.config import WatchedBroker
 from src.jobs.broker_watch.parsers import PAGE_BREAK, gedik_composition_table
+from src.jobs.broker_watch.robots import RobotsRules
 
 logger = logging.getLogger(__name__)
 
 CHANGE_NOTE = "change_note"
 COMPOSITION = "composition"
+MAX_PDF_BYTES = 25 * 1024 * 1024  # change notes are well under 1 MB; larger files are refused
 
 YK_RESEARCH_PAGE = "https://www.ykyatirim.com.tr/hizmetler/arastirma"
 _RSS_CONTENT_NS = "{http://purl.org/rss/1.0/modules/content/}"
@@ -118,9 +121,10 @@ class HttpFetcher:
             timeout=timeout,
             follow_redirects=True,
             transport=transport,
+            event_hooks={"request": [self._robots_hook]},
         )
         self._pages: dict[str, str] = {}  # HTML fetched during discovery, reused by fetch()
-        self._robots: dict[str, RobotFileParser | None] = {}  # host -> rules (None: allow all)
+        self._robots: dict[str, RobotsRules | None] = {}  # host -> rules (None: allow all)
 
     def __enter__(self) -> "HttpFetcher":
         return self
@@ -152,44 +156,65 @@ class HttpFetcher:
         # Yapı Kredi's file endpoint requires the research-page cookies (set in discover)
         # and that page as Referer.
         headers = {"Referer": YK_RESEARCH_PAGE} if broker.adapter == "yk_json" else {}
-        data = self._get(doc.file_url, headers=headers).content
+        data = self._download(doc.file_url, headers)
         return FetchedDocument(sha256=sha256_hex(data), text=pdf_to_text(data))
 
     # ── HTTP + robots.txt ─────────────────────────────────────────────────────
 
     def _get(self, url: str, **kwargs) -> httpx.Response:
-        self._check_robots(url)
         response = self._client.get(url, **kwargs)
         response.raise_for_status()
         return response
 
+    def _download(self, url: str, headers: dict[str, str]) -> bytes:
+        """GET a file, refusing bodies above MAX_PDF_BYTES (declared or actual)."""
+        with self._client.stream("GET", url, headers=headers) as response:
+            response.raise_for_status()
+            declared = int(response.headers.get("Content-Length") or 0)
+            if declared > MAX_PDF_BYTES:
+                raise ValueError(f"file too large ({declared} bytes > {MAX_PDF_BYTES}): {url}")
+            data = response.read()
+        if len(data) > MAX_PDF_BYTES:
+            raise ValueError(f"file too large ({len(data)} bytes > {MAX_PDF_BYTES}): {url}")
+        return data
+
+    def _robots_hook(self, request: httpx.Request) -> None:
+        """httpx request hook: every outgoing request (redirect hops and POSTs included)
+        must be allowed by the host's robots.txt; robots.txt itself is exempt."""
+        if not request.url.path.endswith("/robots.txt"):
+            self._check_robots(str(request.url))
+
     def _check_robots(self, url: str) -> None:
         parts = urlsplit(url)
         if parts.netloc not in self._robots:
+            self._robots[parts.netloc] = None  # requests made while loading are not re-checked
             self._robots[parts.netloc] = self._load_robots(
                 f"{parts.scheme}://{parts.netloc}/robots.txt"
             )
         rules = self._robots[parts.netloc]
-        if rules is not None and not rules.can_fetch(self._user_agent, url):
+        if rules is not None and not rules.can_fetch(url):
             raise RobotsDisallowed(url)
 
-    def _load_robots(self, robots_url: str) -> RobotFileParser | None:
-        """Rules of one host; None (allow all) when the file is missing or unreachable."""
+    def _load_robots(self, robots_url: str) -> RobotsRules | None:
+        """Rules of one host: missing (4xx) -> None (allow all); unreachable or 5xx ->
+        disallow all for this run (RFC 9309 §2.3.1.4)."""
         try:
             response = self._client.get(robots_url)
         except httpx.HTTPError as exc:
-            logger.warning("robots.txt unreachable, assuming allowed: %s (%s)", robots_url, exc)
-            return None
+            logger.warning(
+                "robots.txt unreachable, disallowing the host this run: %s (%s)", robots_url, exc
+            )
+            return RobotsRules.disallow_all()
         if response.status_code >= 500:
             logger.warning(
-                "robots.txt returned %d, assuming allowed: %s", response.status_code, robots_url
+                "robots.txt returned %d, disallowing the host this run: %s",
+                response.status_code,
+                robots_url,
             )
-            return None
+            return RobotsRules.disallow_all()
         if response.status_code >= 400:
             return None  # no robots.txt
-        rules = RobotFileParser()
-        rules.parse(response.text.splitlines())
-        return rules
+        return RobotsRules(response.text, self._user_agent)
 
     # ── Per-source discovery ──────────────────────────────────────────────────
 
@@ -202,11 +227,11 @@ class HttpFetcher:
             url = broker.url if page == 1 else _with_query(broker.url, paged=page)
             try:
                 root = ElementTree.fromstring(self._get(url).content)
-            except httpx.HTTPStatusError as exc:
+            except (httpx.HTTPError, ElementTree.ParseError, RobotsDisallowed) as exc:
                 if page == 1:
                     raise
-                logger.info("İş feed page %d not available (%s)", page, exc.response.status_code)
-                break
+                logger.warning("İş feed page %d skipped (%s: %s)", page, type(exc).__name__, exc)
+                break  # keep the documents found so far
             items = list(root.iter("item"))
             if not items:
                 break
@@ -233,7 +258,6 @@ class HttpFetcher:
     def _discover_yk(self, broker: WatchedBroker) -> list[DiscoveredDocument]:
         """Reports JSON (POST, empty body) filtered to public 'Model Portföy' entries."""
         self._get(YK_RESEARCH_PAGE)  # sets the session cookies the file endpoint requires
-        self._check_robots(broker.url)
         response = self._client.post(
             broker.url,
             content=b"",
