@@ -5,6 +5,7 @@ This directory contains scheduled/background job code that runs outside HTTP req
 Current planned job:
 
 - `youtube_watch/`: Poll tracked YouTube channels, detect new videos, and trigger ingestion pipeline.
+- `broker_watch/`: Follow broker model-portfolio change notes (İş, Yapı Kredi, Gedik), store documents, events and composition snapshots (OI-027).
 
 Design rules:
 
