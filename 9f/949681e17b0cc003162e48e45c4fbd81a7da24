@@ -1,0 +1,65 @@
+src/jobs/broker_watch/parsers.py
+  s_3e6f9cdfbccd88::t_eab7b3a95031bc 1-204,208-315,318-391
+  s_3e6f9cdfbccd88::t_4ba4c05c0901f6 205-207
+  s_3e6f9cdfbccd88::t_89509d818b0c30 316-317
+src/jobs/broker_watch/runner.py
+  s_3e6f9cdfbccd88::t_6fd50159f0ea04 1-87
+src/jobs/broker_watch/service.py
+  s_3e6f9cdfbccd88::t_2069c99197ff9c 168-169,174-176
+  s_3e6f9cdfbccd88::t_caededd7bcdc2a 220-222
+  s_3e6f9cdfbccd88::t_2806729e6cb67d 1-167,170-173,177-219,223-315
+  s_3e6f9cdfbccd88::t_b9ab77652f8b8a 316
+src/jobs/broker_watch/router.py
+  s_3e6f9cdfbccd88::t_c904609bc78029 1-186
+tests/broker_watch/fixtures.py
+  s_3e6f9cdfbccd88::t_4ef16c2e20740c 1-16,18-64,66-68,70-71,73-77,79-96
+  s_3e6f9cdfbccd88::t_81537be4ead150 78
+  s_3e6f9cdfbccd88::t_e0a0e5e0d70168 17
+  s_3e6f9cdfbccd88::t_4cc2202fdef6fb 65,69,72
+tests/broker_watch/test_router.py
+  s_3e6f9cdfbccd88::t_dd783a45edcd4f 1-66
+  s_3e6f9cdfbccd88::t_d3b63493aaf271 67-68
+tests/broker_watch/test_service.py
+  s_3e6f9cdfbccd88::t_a4b776ffb0261a 1-183
+  s_3e6f9cdfbccd88::t_0062cc5bf6451b 184-187
+src/jobs/broker_watch/adapters.py
+  s_3e6f9cdfbccd88::t_c5e414fbe07327 27-28
+  s_3e6f9cdfbccd88::t_adec5422ea9abd 1-26,29-192
+tests/broker_watch/test_config.py
+  s_3e6f9cdfbccd88::t_ed40e1ea94d166 1-41
+tests/broker_watch/test_parsers.py
+  s_3e6f9cdfbccd88::t_ab767ba2356d5d 32
+  s_3e6f9cdfbccd88::t_aeaace27a2b665 1-31,33-171
+src/jobs/broker_watch/config.py
+  s_3e6f9cdfbccd88::t_cf71638f0bad73 1-87
+src/jobs/broker_watch/models.py
+  s_3e6f9cdfbccd88::t_e8156cb871abe7 1-114
+config/bist_tickers.txt
+  s_3e6f9cdfbccd88::t_a8fe63d2ef70e3 1-58
+config/watched_brokers.yaml
+  s_3e6f9cdfbccd88::t_85e9a97457fe1d 1-30
+src/config.py
+  s_3e6f9cdfbccd88::t_ccd1d7b69990da 48-49
+src/jobs/README.md
+  s_3e6f9cdfbccd88::t_fc0404de8c3900 8
+src/main.py
+  s_3e6f9cdfbccd88::t_e67d9254225697 27,73,88
+tests/conftest.py
+  s_3e6f9cdfbccd88::t_f943e53628d391 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9f949681e17b0cc003162e48e45c4fbd81a7da24",
+  "prompts": {},
+  "sessions": {
+    "s_3e6f9cdfbccd88": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89ee580c-f84b-4918-9419-9b9b615328c1",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
