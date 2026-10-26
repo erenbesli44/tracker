@@ -167,16 +167,21 @@ class HttpFetcher:
         return response
 
     def _download(self, url: str, headers: dict[str, str]) -> bytes:
-        """GET a file, refusing bodies above MAX_PDF_BYTES (declared or actual)."""
+        """GET a file, refusing bodies above MAX_PDF_BYTES: by the declared length before
+        reading, and while streaming (a chunked response is never buffered beyond the cap)."""
         with self._client.stream("GET", url, headers=headers) as response:
             response.raise_for_status()
             declared = int(response.headers.get("Content-Length") or 0)
             if declared > MAX_PDF_BYTES:
                 raise ValueError(f"file too large ({declared} bytes > {MAX_PDF_BYTES}): {url}")
-            data = response.read()
-        if len(data) > MAX_PDF_BYTES:
-            raise ValueError(f"file too large ({len(data)} bytes > {MAX_PDF_BYTES}): {url}")
-        return data
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in response.iter_bytes():
+                size += len(chunk)
+                if size > MAX_PDF_BYTES:
+                    raise ValueError(f"file too large (> {MAX_PDF_BYTES} bytes): {url}")
+                chunks.append(chunk)
+        return b"".join(chunks)
 
     def _robots_hook(self, request: httpx.Request) -> None:
         """httpx request hook: every outgoing request (redirect hops and POSTs included)

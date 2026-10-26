@@ -6,6 +6,7 @@ from tests.broker_watch import fixtures as fx
 ALL_TEXTS = [
     fx.ISY_20_OCT_TEXT,
     fx.ISY_1_SEP_TEXT,
+    fx.ISY_1_SEP_PDF_SENTENCE,
     fx.GEDIK_22_SEP_TEXT,
     fx.GEDIK_6_AUG_TEXT,
     fx.YK_14_SEP_PAGE1,
@@ -234,13 +235,9 @@ def test_is_known_ticker_uses_config_list():
 
 
 def test_isy_weight_sentence_survives_pypdf_split_words():
-    # pypdf splits words at glyph-positioning points in the real 1 Sep PDF ('i ndirim',
-    # 'ağ ırlığını', 'h edef'); the feed excerpt used as fixture does not.
-    text = (
-        fx.ISY_1_SEP_TEXT.replace("hedef", "h edef")
-        .replace("faiz indirim", "faiz i ndirim")
-        .replace("ENJSA ağırlığını", "ENJSA ağ ırlığını")
-    )
+    # Real pypdf output of the 1 Sep PDF: 'i ndirim' (a noun) and 'ağ ırlığını' are split,
+    # the verb stems are intact. The feed excerpt (ISY_1_SEP_TEXT) has no splits.
+    text = fx.ISY_1_SEP_PDF_SENTENCE
     doc = parsers.parse_isy_rss(text, published_at=fx.ISY_1_SEP_DATE)
 
     assert [(e.ticker, e.action) for e in doc.events] == [
@@ -250,10 +247,25 @@ def test_isy_weight_sentence_survives_pypdf_split_words():
         ("ENJSA", "weight_up"),
     ]
     assert not doc.needs_review
+    assert any("TCMB" in w for w in doc.warnings)
     _assert_quotes_ok(doc, text)
 
 
+def test_isy_weight_verb_stems_stay_strict():
+    # Verb stems are not loosened on purpose: with optional gaps 'az altın' would match
+    # 'azalt' and 'in dirençli' would match 'indir', inventing a direction across words.
+    # A clause without a contiguous stem yields no weight event.
+    for clause in (
+        "Tüpraş’ın ağırlığını daha az altın fiyatına bağlı kalacak şekilde koruyoruz.",
+        "AKBNK ağırlığını korurken in dirençli bankacılık sektörüne odaklanıyoruz.",
+    ):
+        doc = parsers.parse_isy_rss(f"Model Portföy Değişiklikler {clause} 20.10.2026")
+        assert doc.events == [], clause
+
+
 def test_isy_and_gedik_headers_tolerate_split_words():
+    # Synthetic splits: the real 20 Oct and 22 Sep PDFs keep these headings intact
+    # (checked 2026-10-26); this guards the _loose() patterns themselves.
     text = fx.ISY_20_OCT_TEXT.replace("Eklenen Şirket", "Ekle nen Şirket").replace(
         "Model Portföy Değişiklikler", "Model Portf öy Değişiklikler"
     )

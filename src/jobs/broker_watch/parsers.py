@@ -108,11 +108,15 @@ def html_to_text(markup: str) -> str:
 
 
 def _loose(phrase: str) -> str:
-    """Regex for ``phrase`` tolerating a stray space inside each word.
+    """Regex for ``phrase`` allowing an optional space in every gap between letters.
 
     pypdf's plain extraction splits words at glyph-positioning boundaries in some
-    PDFs ('ağ ırlığını', 'h edef' in İş Yatırım's 1 Sep 2026 note); the keyword
-    patterns must still match, and quotes stay verbatim from the stored text.
+    PDFs ('ağ ırlığını', 'h edef' in İş Yatırım's 1 Sep 2026 note); headings, body
+    markers, weight nouns and company names must still match, and quotes stay
+    verbatim from the stored text. Not used for the weight verb stems: loosened
+    stems match across word boundaries ('az altın' -> azalt, 'in dirençli' ->
+    indir), so a split verb stem must leave the clause unmatched (the document
+    then reports no change and goes to review) rather than invent a direction.
     """
     return " ".join(" ?".join(re.escape(char) for char in word) for word in phrase.split())
 
@@ -239,9 +243,9 @@ _ISY_TICKER_LABEL = re.compile(r"^(?:[A-Z0-9]{4,5}\.IS\s*(?:&|,|ve)?\s*)+:\s*")
 # the verb stem decides the direction. "ağrılığını" is the broker's own typo.
 _WEIGHT_NOUN_FORMS = ("ağırlığını", "ağrılığını", "ağırlıklarını")
 _WEIGHT_NOUN = "(?:" + "|".join(_loose(n) for n in _WEIGHT_NOUN_FORMS) + ")"
-_WEIGHT_VERB_STEMS = ("indir", "azalt", "düşür", "çek", "artır", "arttır", "yükselt")
+# Verb stems stay strict (no _loose): see its docstring.
 _WEIGHT_CLAUSE = re.compile(
-    _WEIGHT_NOUN + r"\s[^;.]{0,60}?\b(" + "|".join(_loose(v) for v in _WEIGHT_VERB_STEMS) + ")"
+    _WEIGHT_NOUN + r"\s[^;.]{0,60}?\b(indir|azalt|düşür|çek|artır|arttır|yükselt)"
 )
 _WEIGHT_DOWN_STEMS = ("indir", "azalt", "düşür", "çek")
 # A company name counts only in the genitive right before the weight noun
@@ -298,8 +302,7 @@ def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str]]
         for m in _WEIGHT_CLAUSE.finditer(sentence):
             scope = sentence[start : m.end()]
             start = m.end()
-            stem = m.group(1).replace(" ", "")
-            action = WEIGHT_DOWN if stem in _WEIGHT_DOWN_STEMS else WEIGHT_UP
+            action = WEIGHT_DOWN if m.group(1) in _WEIGHT_DOWN_STEMS else WEIGHT_UP
             tickers = _tickers_in(scope, doc.warnings)
             if not tickers:
                 doc.warnings.append(f"weight clause without a known ticker: {scope[:80]!r}")

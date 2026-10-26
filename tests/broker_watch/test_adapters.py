@@ -33,11 +33,12 @@ class FakeSites:
     """
 
     def __init__(self) -> None:
-        self.routes: dict[str, tuple[int, bytes | str | list, dict[str, str]]] = {}
+        self.routes: dict[str, tuple[int, bytes | str | list | httpx.SyncByteStream, dict]] = {}
         self.failing: set[str] = set()
         self.requests: list[httpx.Request] = []
 
-    def add(self, url: str, body: bytes | str | list, status: int = 200, headers=None) -> None:
+    def add(self, url: str, body, status: int = 200, headers=None) -> None:
+        """``body``: bytes, text, a JSON list, or an httpx.ByteStream (no Content-Length)."""
         self.routes[url] = (status, body, headers or {})
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -48,6 +49,8 @@ class FakeSites:
         if url not in self.routes:
             return httpx.Response(404, text="not found")
         status, body, headers = self.routes[url]
+        if isinstance(body, httpx.SyncByteStream):
+            return httpx.Response(status, stream=body, headers=headers)
         if isinstance(body, list):
             return httpx.Response(status, json=body, headers=headers)
         if isinstance(body, str):
@@ -165,6 +168,12 @@ def test_fetch_refuses_files_above_the_size_cap(monkeypatch):
 
     monkeypatch.setattr(adapters, "MAX_PDF_BYTES", 10)  # actual body above the cap
     site.add(fx.ISY_PDF_20_OCT, fx.minimal_pdf(["x"]))
+    with site.fetcher() as fetcher, pytest.raises(ValueError, match="too large"):
+        fetcher.fetch(BROKERS["is-yatirim"], doc)
+
+    # Streamed body without Content-Length: the cap is enforced while reading chunks.
+    assert "Content-Length" not in httpx.Response(200, stream=httpx.ByteStream(b"x")).headers
+    site.add(fx.ISY_PDF_20_OCT, httpx.ByteStream(fx.minimal_pdf(["x"])))
     with site.fetcher() as fetcher, pytest.raises(ValueError, match="too large"):
         fetcher.fetch(BROKERS["is-yatirim"], doc)
 
@@ -299,6 +308,24 @@ def test_robots_disallow_skips_pdfs_and_is_fetched_once_per_host(rule):
     assert urls.count("https://cdn.gedik.com/robots.txt") == 1
     assert urls.count("https://gedik.com/robots.txt") == 1
     assert fx.GEDIK_PDF_22_SEP not in urls and fx.GEDIK_PDF_6_AUG not in urls
+
+
+def test_robots_disallow_blocks_the_yk_post_after_the_cookie_get():
+    site = FakeSites()
+    site.add(
+        "https://www.ykyatirim.com.tr/robots.txt",
+        "User-agent: *\nDisallow: /DetailPage/GetResearchReports\n",
+    )
+    site.add(fx.YK_RESEARCH_PAGE, "<html>arastirma</html>")
+    site.add(fx.YK_REPORTS_URL, fx.YK_REPORTS_JSON)
+
+    with site.fetcher() as fetcher, pytest.raises(RobotsDisallowed, match="GetResearchReports"):
+        fetcher.discover(BROKERS["yapi-kredi-yatirim"])
+
+    assert [(r.method, str(r.url)) for r in site.requests] == [
+        ("GET", "https://www.ykyatirim.com.tr/robots.txt"),
+        ("GET", fx.YK_RESEARCH_PAGE),  # the POST never reaches the transport
+    ]
 
 
 def test_robots_disallow_for_our_agent_blocks_discovery():

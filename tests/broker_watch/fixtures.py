@@ -27,6 +27,15 @@ ISY_1_SEP_TEXT = (
     "artırıyoruz."
 )
 ISY_1_SEP_DATE = date(2026, 9, 1)
+# The same sentence as pypdf (plain mode) extracts it from the PDF itself, page 1,
+# https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/09/01_09_2026.pdf (read 2026-10-26):
+# words are split at glyph-positioning points ('h edef', 'i ndirim', 'ağ ırlığını').
+ISY_1_SEP_PDF_SENTENCE = (
+    "Güçlü rafineri marjlarının etkisiyle 372 TL'lik 12 aylık h edef fiyatımızı %8 aşan "
+    "Tüpraş'ın portföydeki ağırlığını %7'ye indirirken, TCMB'nin olası faiz i ndirim "
+    "sürecinin başlıca kazananları olacak faize duyarlı hisselerin AKBNK, GARAN ve ENJSA "
+    "ağ ırlığını artırıyoruz."
+)
 
 # Gedik Yatırım, "Model Portföy Güncellemesi", 22 Sep 2026, PDF page 1 (reasons trimmed),
 # https://cdn.gedik.com/media/media/brnjmjkx/modelportfoyguncellemesi_22092026.pdf
