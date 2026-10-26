@@ -1,0 +1,49 @@
+src/jobs/broker_watch/adapters.py
+  s_3e6f9cdfbccd88::t_85d44cae34b341 4-6,8-9,14-15,20-21,25,28-30,39-41,64-67,69,71-72,74-81,98-102,104-107,110-113,115-120,123-132,158,161,166-195,197-199,201-216,218-230,236,256-258
+pyproject.toml
+  s_3e6f9cdfbccd88::t_e3f5ff00b3f532 20
+src/database.py
+  s_3e6f9cdfbccd88::t_1b4baa7114f59c 219-230,310-315,696-697
+src/jobs/README.md
+  s_3e6f9cdfbccd88::t_3e6ec32ece9a80 8
+src/jobs/broker_watch/config.py
+  s_3e6f9cdfbccd88::t_f36ed73b2a1c41 26-27
+src/jobs/broker_watch/models.py
+  s_3e6f9cdfbccd88::t_d91ca4c509a2f3 79-81,93
+src/jobs/broker_watch/parsers.py
+  s_3e6f9cdfbccd88::t_48e6fd61b6bb8e 66-68,236-237,273-274,287-289,326-327,334-335,368,370,375-377,380-381
+src/jobs/broker_watch/router.py
+  s_3e6f9cdfbccd88::t_b8e3fb19c9c3cb 173,175-176
+src/jobs/broker_watch/service.py
+  s_3e6f9cdfbccd88::t_cdd615580c09c9 1,4-6,12,14,23,44,58-59,79-82,84-93,96-98,103-109,144-145,151-152,215-219,228-235,372,380-431
+tests/broker_watch/fixtures.py
+  s_3e6f9cdfbccd88::t_c007114338ca2d 97-209
+tests/broker_watch/test_adapters.py
+  s_3e6f9cdfbccd88::t_2ba2f4c7d02a76 1-300
+tests/broker_watch/test_migration.py
+  s_3e6f9cdfbccd88::t_733425677f0669 1-39
+tests/broker_watch/test_parsers.py
+  s_3e6f9cdfbccd88::t_d567a3d2825160 231-273
+tests/broker_watch/test_router.py
+  s_3e6f9cdfbccd88::t_fba957cdd7bb76 69-85
+tests/broker_watch/test_service.py
+  s_3e6f9cdfbccd88::t_aac2f797529e06 6-7,17,20,30,230-425
+uv.lock
+  s_3e6f9cdfbccd88::t_c27de50a880205 828-836,1233,1267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bfa1c60984d8b83c1627b167a196522be7c8a031",
+  "prompts": {},
+  "sessions": {
+    "s_3e6f9cdfbccd88": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89ee580c-f84b-4918-9419-9b9b615328c1",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
