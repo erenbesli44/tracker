@@ -60,6 +60,9 @@ class ParsedDocument:
     events: list[ParsedEvent] = field(default_factory=list)
     composition: list[ParsedHolding] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # True when a rule saw a change it could not attribute (e.g. a weight clause
+    # without a known ticker); the document must then be reviewed as a whole.
+    needs_review: bool = False
 
 
 # ── Ticker list ───────────────────────────────────────────────────────────────
@@ -110,9 +113,10 @@ _SENTENCE_TAIL = re.compile(r"[.!?][”\")]?$")
 def build_quote(body: str, limit: int = MAX_QUOTE_CHARS) -> str:
     """Leading whole sentences of ``body`` that fit in ``limit`` chars, verbatim.
 
-    A trailing fragment without a sentence end is never included (it is usually
-    the next section's heading). If even the first sentence is too long, the
-    cut falls on the last word boundary before ``limit``.
+    A fragment without any sentence end (usually the next section's heading)
+    yields '' so the caller flags the event instead of quoting it. If the first
+    sentence alone is too long, the cut falls on the last word boundary before
+    ``limit``.
     """
     body = body.strip()
     ends = [m.start() for m in _SENTENCE_BREAK.finditer(body)]
@@ -124,8 +128,8 @@ def build_quote(body: str, limit: int = MAX_QUOTE_CHARS) -> str:
             break
         cut = end
     if cut == 0:
-        if len(body) <= limit:
-            return body
+        if not ends:
+            return ""
         cut = body.rfind(" ", 0, limit + 1)
         if cut <= 0:
             cut = limit
@@ -158,6 +162,11 @@ def first_turkish_date(text: str) -> date | None:
     if not m:
         return None
     return _safe_date(int(m.group(3)), TURKISH_MONTHS[m.group(2).lower()], int(m.group(1)))
+
+
+def _fold(word: str) -> str:
+    """Lowercase a Turkish word safely (str.lower() turns İ into a two-code-point i̇)."""
+    return word.replace("İ", "i").replace("I", "ı").lower()
 
 
 def _to_float(value: str) -> float | None:
@@ -206,8 +215,20 @@ _ISY_BODY_END = re.compile(
     r"\s(?:Eklenen Şirket|Çıkartılan Şirket|En Çok Önerilenler Listesinde)\b"
 )
 _ISY_TICKER_LABEL = re.compile(r"^(?:[A-Z0-9]{4,5}\.IS\s*(?:&|,|ve)?\s*)+:\s*")
-# "ağırlığını %7'ye indirirken" / "ağırlığını artırıyoruz": verb stem decides the direction.
-_WEIGHT_CLAUSE = re.compile(r"ağırlığını\s[^;.]{0,60}?\b(indir|azalt|düşür|artır|arttır|yükselt)")
+# Weight sentences: "<X> ağırlığını %7'ye indirirken", "... ağırlıklarını artırıyoruz";
+# the verb stem decides the direction. "ağrılığını" is the broker's own typo.
+_WEIGHT_NOUN = r"ağ(?:ırlığ|rılığ|ırlıklar)ını"
+_WEIGHT_CLAUSE = re.compile(
+    _WEIGHT_NOUN + r"\s[^;.]{0,60}?\b(indir|azalt|düşür|çek|artır|arttır|yükselt)"
+)
+_WEIGHT_DOWN_STEMS = ("indir", "azalt", "düşür", "çek")
+# A company name counts only in the genitive right before the weight noun
+# ("Tüpraş’ın portföydeki ağırlığını"); other cases ("Akbank'a", "Akbank'tan") do not.
+_GENITIVE_BEFORE_WEIGHT = r"[’']n?[ıiuü]n\s+(?:\S+\s+){0,2}" + _WEIGHT_NOUN
+_COMPANY_WEIGHT = {
+    ticker: re.compile(re.escape(name) + _GENITIVE_BEFORE_WEIGHT)
+    for name, ticker in COMPANY_TICKERS.items()
+}
 _UPPER_TOKEN = re.compile(r"\b[A-Z][A-Z0-9]{3,4}\b")
 
 
@@ -233,7 +254,7 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
         _add_event(doc, m.group(1), ADDED, event_date, quote)
     for m in _ISY_REMOVED.finditer(page1):
         _add_event(doc, m.group(1), REMOVED, event_date, quote)
-    for ticker, action in _isy_weight_changes(body, doc.warnings):
+    for ticker, action in _isy_weight_changes(body, doc):
         _add_event(doc, ticker, action, event_date, quote)
 
     if not doc.events:
@@ -241,36 +262,39 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
     return doc
 
 
-def _isy_weight_changes(body: str, warnings: list[str]) -> list[tuple[str, str]]:
-    """(ticker, action) pairs from weight sentences; each clause scopes its own tickers."""
+def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str]]:
+    """(ticker, action) pairs from weight sentences; each clause scopes its own tickers.
+
+    A clause that names no known ticker marks the whole document for review.
+    """
     changes: list[tuple[str, str]] = []
     for sentence in _SENTENCE_BREAK.split(body):
-        if "ağırlığını" not in sentence:
-            continue
         start = 0
         for m in _WEIGHT_CLAUSE.finditer(sentence):
             scope = sentence[start : m.end()]
             start = m.end()
-            action = WEIGHT_DOWN if m.group(1) in ("indir", "azalt", "düşür") else WEIGHT_UP
-            tickers = _tickers_in(scope, warnings)
+            action = WEIGHT_DOWN if m.group(1) in _WEIGHT_DOWN_STEMS else WEIGHT_UP
+            tickers = _tickers_in(scope, doc.warnings)
             if not tickers:
-                warnings.append(f"weight clause without a known ticker: {scope[:80]!r}")
+                doc.warnings.append(f"weight clause without a known ticker: {scope[:80]!r}")
+                doc.needs_review = True
             changes.extend((ticker, action) for ticker in tickers)
     return changes
 
 
 def _tickers_in(scope: str, warnings: list[str]) -> list[str]:
-    """Known tickers (uppercase tokens or mapped company names) in order of appearance."""
+    """Known tickers (uppercase tokens, or mapped company names in the genitive right
+    before the weight noun) in order of appearance."""
     found: list[tuple[int, str]] = []
     for m in _UPPER_TOKEN.finditer(scope):
         if is_known_ticker(m.group(0)):
             found.append((m.start(), m.group(0)))
         else:
             warnings.append(f"skipped unknown ticker candidate {m.group(0)}")
-    for name, ticker in COMPANY_TICKERS.items():
-        position = scope.find(name)
-        if position >= 0:
-            found.append((position, ticker))
+    for ticker, pattern in _COMPANY_WEIGHT.items():
+        m = pattern.search(scope)
+        if m:
+            found.append((m.start(), ticker))
     ordered: list[str] = []
     for _, ticker in sorted(found):
         if ticker not in ordered:
@@ -280,10 +304,11 @@ def _tickers_in(scope: str, warnings: list[str]) -> list[str]:
 
 # ── Yapı Kredi Yatırım ────────────────────────────────────────────────────────
 
+# "Model portföyümüzden Vakıfbank’ı çıkartıyoruz" / "MODEL PORTFÖYÜMÜZE BİM'İ EKLİYORUZ".
+# No re.IGNORECASE: it mishandles Turkish İ/ı; the verb is classified via _fold().
 _YK_HEADER = re.compile(
-    r"Model portföyümüz(?:e|den)\s+([^.’']{1,40}?)[’'](?:nı|ni|nu|nü|yı|yi|yu|yü|ı|i|u|ü)?\s+"
-    r"(ekliyoruz|çıkartıyoruz|çıkarıyoruz)",
-    re.IGNORECASE,
+    r"(?:Model [Pp]ortföyümüz|MODEL PORTFÖYÜMÜZ)(?:e|den|E|DEN)\s+([^.’']{1,40}?)[’']"
+    r"(?:[nyNY]?[ıiuüIİUÜ])?\s+(\w+)"
 )
 _YK_TICKER = re.compile(r"\(([A-Z0-9]{4,5})\s+TI\b")
 _YK_RECOMMENDATION = re.compile(r"Öneri:\s*(AL|TUT|SAT)\b")
@@ -303,16 +328,25 @@ def parse_yk_json(text: str, *, published_at: date | None = None) -> ParsedDocum
 
     headers = list(_YK_HEADER.finditer(page1))
     for i, m in enumerate(headers):
+        verb = _fold(m.group(2))
+        if verb.startswith("ekl"):
+            action = ADDED
+        elif verb.startswith("çık"):
+            action = REMOVED
+        else:
+            doc.warnings.append(f"unrecognised verb in header {m.group(0)!r}")
+            doc.needs_review = True
+            continue
         end = headers[i + 1].start() if i + 1 < len(headers) else len(page1)
         segment = page1[m.end() : end]
         ticker_m = _YK_TICKER.search(segment)
         if not ticker_m:
             doc.warnings.append(f"no ticker after header {m.group(0)!r}")
+            doc.needs_review = True
             continue
         recommendation = _YK_RECOMMENDATION.search(segment)
         target = _YK_TARGET.search(segment)
         body_start = max(x.end() for x in (ticker_m, recommendation, target) if x)
-        action = ADDED if m.group(2).lower() == "ekliyoruz" else REMOVED
         quote = build_quote(segment[body_start:])
         event = _add_event(doc, ticker_m.group(1), action, event_date, quote)
         event.recommendation = recommendation.group(1) if recommendation else None

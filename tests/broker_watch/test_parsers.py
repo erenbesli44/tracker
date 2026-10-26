@@ -159,10 +159,69 @@ def test_build_quote_limits_and_sentence_cuts():
     assert parsers.build_quote(text, limit=20) == "Birinci cümle."
     assert parsers.build_quote(text, limit=28) == "Birinci cümle. İkinci cümle."
     assert parsers.build_quote(text) == text
-    assert parsers.build_quote("Başlık parçası") == "Başlık parçası"
-    long_sentence = "kelime " * 60
+    assert parsers.build_quote("Başlık parçası") == ""  # no sentence end: not a reason
+    long_sentence = "kelime " * 60 + "son."
     quote = parsers.build_quote(long_sentence)
-    assert len(quote) <= parsers.MAX_QUOTE_CHARS and quote in long_sentence
+    assert 0 < len(quote) <= parsers.MAX_QUOTE_CHARS and quote in long_sentence
+
+
+def test_gedik_header_followed_by_header_has_no_quote():
+    text = "Tüpraş’ı (TUPRS) çıkarıyoruz: Astor Enerji’yi (ASTOR) ekliyoruz: Sebep burada."
+    doc = parsers.parse_gedik_page(text, published_at=date(2026, 9, 22))
+
+    events = _by_ticker(doc)
+    assert events["TUPRS"].reason_quote == ""
+    assert events["TUPRS"].needs_review
+    assert events["ASTOR"].reason_quote == "Sebep burada."
+    assert not events["ASTOR"].needs_review
+
+
+def test_isy_company_name_counts_only_in_genitive_before_weight_noun():
+    dative = (
+        "Model Portföy Değişiklikler Sabancı Holding üzerinden Akbank'a dolaylı yatırım "
+        "yaparken Sabancı Holding ağırlığını artırıyoruz. 20.10.2026"
+    )
+    doc = parsers.parse_isy_rss(dative)
+    assert "AKBNK" not in _by_ticker(doc)
+    assert doc.events == [] and doc.needs_review
+    assert any("weight clause without a known ticker" in w for w in doc.warnings)
+
+    ablative = "Akbank'tan sonra Garanti'nin ağırlığını %10'a yükseltiyoruz. 20.10.2026"
+    doc = parsers.parse_isy_rss(ablative)
+    assert "AKBNK" not in _by_ticker(doc)
+
+
+def test_isy_weight_noun_and_verb_variants():
+    text = (
+        "Model Portföy Değişiklikler AKBNK ve GARAN ağırlıklarını artırırken ENJSA’nın "
+        "ağrılığını %5’e çekiyoruz. 01.09.2026"
+    )
+    doc = parsers.parse_isy_rss(text)
+
+    assert [(e.ticker, e.action) for e in doc.events] == [
+        ("AKBNK", "weight_up"),
+        ("GARAN", "weight_up"),
+        ("ENJSA", "weight_down"),
+    ]
+    assert not doc.needs_review
+
+
+def test_yk_uppercase_header_is_added_not_removed():
+    text = (
+        "MODEL PORTFÖYÜMÜZE BİM'İ EKLİYORUZ. Bim (BIMAS TI, 400.00TL) Öneri: AL, "
+        "(Hedef Fiyat: 500.00TL) Bim'i model portföyümüze ekliyoruz."
+    )
+    doc = parsers.parse_yk_json(text, published_at=date(2026, 9, 14))
+
+    assert [(e.ticker, e.action, e.needs_review) for e in doc.events] == [("BIMAS", "added", False)]
+
+
+def test_yk_unknown_verb_flags_document_instead_of_guessing():
+    text = "Model portföyümüzden Vakıfbank’ı koruyoruz. Vakıfbank (VAKBN TI, 38.08TL) Öneri: AL"
+    doc = parsers.parse_yk_json(text, published_at=date(2026, 9, 14))
+
+    assert doc.events == [] and doc.needs_review
+    assert any("unrecognised verb" in w for w in doc.warnings)
 
 
 def test_is_known_ticker_uses_config_list():

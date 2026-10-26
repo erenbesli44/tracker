@@ -2,7 +2,11 @@
 
 Network only; parsing lives in ``parsers.py``. ``HttpFetcher`` is the production
 ``SourceFetcher``; tests inject a fake with the same two methods and never touch
-the network.
+the network. Parsers expect PDF pages joined with form feeds (``\\f``).
+
+Deferred to OI-027 step 2: a real ``pdf_to_text`` (no PDF library in uv.lock),
+robots.txt honouring (plan criterion F) and the snapshot-consistency check for
+added/removed events (plan criterion D).
 """
 
 import hashlib

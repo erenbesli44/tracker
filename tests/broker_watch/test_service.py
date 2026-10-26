@@ -148,6 +148,44 @@ def test_stored_events_match_parsed_documents(session: Session):
     yk_items = {i["ticker"]: i["entry_date"] for i in by_broker[brokers["yapi-kredi-yatirim"].id]}
     assert yk_items["BIMAS"] == "2023-01-16"
     assert all(d.parse_status == "parsed" for d in documents.values())
+    # Warnings are persisted even for parsed documents (TCMB skipped in the 1 Sep note).
+    weight_note = next(d for d in documents.values() if d.file_url == ISY_1_SEP.file_url)
+    assert "TCMB" in weight_note.parse_error
+
+
+def test_weight_clause_without_ticker_marks_document_needs_review(session: Session):
+    text = (
+        "Model Portföy Değişiklikler Örnek Şirket’in ağırlığını %5’e indiriyoruz. "
+        "Eklenen Şirket SAHOL.IS 05.10.2026"
+    )
+    note = _doc(CHANGE_NOTE, f"{ISY_URL}/05_10_2026.pdf", date(2026, 10, 5))
+    fetcher = FakeFetcher({"is-yatirim": [note]}, texts={**TEXTS, note: text})
+
+    summary = service.run_once(session.get_bind(), load_broker_config(), fetcher=fetcher)
+
+    assert summary.status == "success" and summary.events_new == 1
+    document = session.exec(select(BrokerDocument)).one()
+    assert document.parse_status == "needs_review"
+    assert "weight clause without a known ticker" in document.parse_error
+    event = session.exec(select(ModelPortfolioEvent)).one()
+    assert (event.ticker, event.action, event.review_status) == ("SAHOL", "added", "auto")
+
+
+def test_composition_without_table_is_failed_and_counted(session: Session):
+    texts = {**TEXTS, GEDIK_PAGE: "<html><body><p>Model Portföy</p></body></html>"}
+    fetcher = FakeFetcher({"gedik-yatirim": [GEDIK_PAGE, GEDIK_22_SEP]}, texts=texts)
+
+    summary = service.run_once(session.get_bind(), load_broker_config(), fetcher=fetcher)
+
+    assert summary.status == "partial_fail" and summary.errors_count == 1
+    assert (summary.documents_new, summary.events_new, summary.snapshots_new) == (2, 2, 0)
+    page = session.exec(select(BrokerDocument).where(BrokerDocument.kind == COMPOSITION)).one()
+    assert page.parse_status == "failed"
+    assert page.parse_error == "composition table not found"
+    results = {r.broker_slug: r for r in session.exec(select(BrokerWatchSourceResult)).all()}
+    result = results["gedik-yatirim"]
+    assert result.status == "partial" and result.errors_count == 1
+    assert "composition table not found" in result.error_detail
 
 
 def test_unknown_ticker_event_is_stored_as_needs_review(session: Session):

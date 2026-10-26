@@ -171,12 +171,15 @@ def _process_source(
                 fetched = fetcher.fetch(broker_cfg, doc)
                 if _has_sha256(session, fetched.sha256):
                     continue
-                events_new, snapshots_new = _store_document(
+                events_new, snapshots_new, failure = _store_document(
                     session, broker, broker_cfg, doc, fetched
                 )
                 result.documents_new += 1
                 result.events_new += events_new
                 result.snapshots_new += snapshots_new
+                if failure:
+                    result.errors_count += 1
+                    result.error_detail = f"{doc.file_url or doc.source_url}: {failure}"
             except Exception as exc:
                 session.rollback()
                 logger.error("Document failed for %s: %s", broker_cfg.slug, exc, exc_info=True)
@@ -234,7 +237,11 @@ def _parse(
 ) -> parsers.ParsedDocument:
     if kind == COMPOSITION:
         holdings = parsers.parse_gedik_composition(text)
-        return parsers.ParsedDocument(text=parsers.normalize_text(text), composition=holdings)
+        return parsers.ParsedDocument(
+            text=parsers.normalize_text(text),
+            composition=holdings,
+            warnings=[] if holdings else ["composition table not found"],
+        )
     return CHANGE_NOTE_PARSERS[adapter](text, published_at=published_at)
 
 
@@ -244,19 +251,29 @@ def _store_document(
     cfg: WatchedBroker,
     doc: DiscoveredDocument,
     fetched: FetchedDocument,
-) -> tuple[int, int]:
-    """Insert the document, its new events and snapshot; returns (events_new, snapshots_new)."""
+) -> tuple[int, int, str | None]:
+    """Insert the document, its new events and snapshot.
+
+    Returns (events_new, snapshots_new, failure); ``failure`` is the parse_error of a
+    document stored with parse_status "failed", which the caller counts as an error.
+    """
     try:
         parsed = _parse(cfg.adapter, doc.kind, fetched.text, doc.published_at)
-        status = "needs_review" if any(e.needs_review for e in parsed.events) else "parsed"
-        if doc.kind != COMPOSITION and not parsed.events:
+        flagged = parsed.needs_review or any(e.needs_review for e in parsed.events)
+        if doc.kind == COMPOSITION:
+            status = "parsed" if parsed.composition else "failed"
+        elif flagged or not parsed.events:
             status = "needs_review"
-        error = "; ".join(parsed.warnings)[:1000] if status != "parsed" else None
+        else:
+            status = "parsed"
     except Exception as exc:  # a parser bug must not lose the document
         source = doc.file_url or doc.source_url
         logger.error("Parse failed for %s: %s", source, exc, exc_info=True)
         parsed = parsers.ParsedDocument(text=parsers.normalize_text(fetched.text))
-        status, error = "failed", f"{type(exc).__name__}: {str(exc)[:400]}"
+        parsed.warnings.append(f"{type(exc).__name__}: {str(exc)[:400]}")
+        status = "failed"
+    # Warnings are kept for audit whatever the status (e.g. a skipped TCMB token).
+    error = "; ".join(parsed.warnings)[:1000] or None
     if parsed.warnings:
         logger.info("Parse warnings for %s: %s", doc.file_url or doc.source_url, parsed.warnings)
 
@@ -313,4 +330,4 @@ def _store_document(
         snapshots_new = 1
 
     session.commit()
-    return events_new, snapshots_new
+    return events_new, snapshots_new, error if status == "failed" else None
