@@ -1,0 +1,30 @@
+# Brokers whose public model-portfolio change notes the broker_watch job follows.
+# Loader: src/jobs/broker_watch/config.py. Plan: doviz repo,
+# docs/research/2026-10-26-model-portfolio-pilot-plan.md (OI-027).
+#
+# adapter: isy_rss (WordPress RSS -> PDF), yk_json (reports JSON -> PDF),
+#          gedik_page (HTML table + linked PDFs)
+# url:     the discovery URL the adapter starts from
+
+defaults:
+  user_agent: "dovizveri-bot/0.1 (+https://dovizveri.com/iletisim)"
+  max_runs_per_day: 2
+
+brokers:
+  - slug: is-yatirim
+    name: "İş Yatırım"
+    adapter: isy_rss
+    url: https://arastirma.isyatirim.com.tr/category/son-haberler/toppick_deg/feed/
+    enabled: true
+
+  - slug: yapi-kredi-yatirim
+    name: "Yapı Kredi Yatırım"
+    adapter: yk_json
+    url: https://www.ykyatirim.com.tr/DetailPage/GetResearchReports
+    enabled: true
+
+  - slug: gedik-yatirim
+    name: "Gedik Yatırım"
+    adapter: gedik_page
+    url: https://gedik.com/analiz/model-portfoy/hisse-model-portfoy
+    enabled: true

@@ -25,6 +25,7 @@ def session_fixture():
     # import all models so their metadata is registered
     import src.channels.models  # noqa: F401
     import src.classification.models  # noqa: F401
+    import src.jobs.broker_watch.models  # noqa: F401
     import src.persons.models  # noqa: F401
     import src.topics.models  # noqa: F401
     import src.videos.models  # noqa: F401
