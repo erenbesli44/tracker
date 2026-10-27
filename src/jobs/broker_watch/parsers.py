@@ -115,8 +115,12 @@ def _loose(phrase: str) -> str:
     markers, weight nouns and company names must still match, and quotes stay
     verbatim from the stored text. Not used for the weight verb stems: loosened
     stems match across word boundaries ('az altın' -> azalt, 'in dirençli' ->
-    indir), so a split verb stem must leave the clause unmatched (the document
-    then reports no change and goes to review) rather than invent a direction.
+    indir) and would invent a direction. A split verb stem therefore leaves its
+    clause without a verb: when no later weight clause follows in the sentence the
+    clause yields no event (the document is stored for review with "no portfolio
+    change found"); otherwise it is merged into the next clause's scope, where
+    ``_isy_weight_changes`` sees two weight nouns and flags that scope's events and
+    the document for review instead of trusting the inherited direction.
     """
     return " ".join(" ?".join(re.escape(char) for char in word) for word in phrase.split())
 
@@ -202,10 +206,16 @@ def _to_float(value: str) -> float | None:
 
 
 def _add_event(
-    doc: ParsedDocument, ticker: str, action: str, event_date: date | None, quote: str
+    doc: ParsedDocument,
+    ticker: str,
+    action: str,
+    event_date: date | None,
+    quote: str,
+    review_reason: str | None = None,
 ) -> ParsedEvent:
-    """Append an event; flag it for review when it could not be fully validated."""
-    reasons = []
+    """Append an event; flag it for review when it could not be fully validated
+    (``review_reason``: a doubt the caller already found, e.g. an unverified direction)."""
+    reasons = [review_reason] if review_reason else []
     if not is_known_ticker(ticker):
         reasons.append("unknown ticker")
     if event_date is None:
@@ -243,6 +253,7 @@ _ISY_TICKER_LABEL = re.compile(r"^(?:[A-Z0-9]{4,5}\.IS\s*(?:&|,|ve)?\s*)+:\s*")
 # the verb stem decides the direction. "ağrılığını" is the broker's own typo.
 _WEIGHT_NOUN_FORMS = ("ağırlığını", "ağrılığını", "ağırlıklarını")
 _WEIGHT_NOUN = "(?:" + "|".join(_loose(n) for n in _WEIGHT_NOUN_FORMS) + ")"
+_WEIGHT_NOUN_RE = re.compile(_WEIGHT_NOUN)
 # Verb stems stay strict (no _loose): see its docstring.
 _WEIGHT_CLAUSE = re.compile(
     _WEIGHT_NOUN + r"\s[^;.]{0,60}?\b(indir|azalt|düşür|çek|artır|arttır|yükselt)"
@@ -282,21 +293,26 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
         _add_event(doc, m.group(1), ADDED, event_date, quote)
     for m in _ISY_REMOVED.finditer(page1):
         _add_event(doc, m.group(1), REMOVED, event_date, quote)
-    for ticker, action in _isy_weight_changes(body, doc):
-        _add_event(doc, ticker, action, event_date, quote)
+    for ticker, action, review_reason in _isy_weight_changes(body, doc):
+        _add_event(doc, ticker, action, event_date, quote, review_reason)
 
     if not doc.events:
         doc.warnings.append("no portfolio change found on page 1")
     return doc
 
 
-def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str]]:
-    """(ticker, action) pairs from weight sentences; each clause scopes its own tickers.
+def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str, str | None]]:
+    """(ticker, action, review_reason) from weight sentences; each clause scopes its own
+    tickers, from the end of the previous matched clause to its own verb.
 
     A clause that names no known ticker, or more companies (genitive forms) than
-    tickers it could map, marks the whole document for review.
+    tickers it could map, marks the whole document for review. A scope holding more
+    than one weight noun means an earlier clause's verb was not recognised (an
+    unlisted verb, or a stem pypdf split such as 'i ndirirken') and that clause fell
+    into this one: its tickers would inherit this verb's direction, so every event
+    of the scope is returned flagged and the document goes to review.
     """
-    changes: list[tuple[str, str]] = []
+    changes: list[tuple[str, str, str | None]] = []
     for sentence in _SENTENCE_BREAK.split(body):
         start = 0
         for m in _WEIGHT_CLAUSE.finditer(sentence):
@@ -304,13 +320,18 @@ def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str]]
             start = m.end()
             action = WEIGHT_DOWN if m.group(1) in _WEIGHT_DOWN_STEMS else WEIGHT_UP
             tickers = _tickers_in(scope, doc.warnings)
+            review_reason = None
+            if len(_WEIGHT_NOUN_RE.findall(scope)) > 1:
+                review_reason = "weight clause without a recognised verb"
+                doc.warnings.append(f"{review_reason}: {scope[:80]!r}")
+                doc.needs_review = True
             if not tickers:
                 doc.warnings.append(f"weight clause without a known ticker: {scope[:80]!r}")
                 doc.needs_review = True
             elif len(_GENITIVE.findall(scope)) > len(tickers):
                 doc.warnings.append(f"weight clause names an unmapped company: {scope[:80]!r}")
                 doc.needs_review = True
-            changes.extend((ticker, action) for ticker in tickers)
+            changes.extend((ticker, action, review_reason) for ticker in tickers)
     return changes
 
 
