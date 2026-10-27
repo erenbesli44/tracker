@@ -420,8 +420,13 @@ def test_isy_15_jan_plural_labels_with_per_ticker_quotes():
         ("ENKAI", "removed"),
         ("YKBNK", "removed"),
     ]
-    assert all(e.event_date == date(2026, 1, 15) and not e.needs_review for e in doc.events)
-    assert not doc.needs_review
+    assert all(e.event_date == date(2026, 1, 15) for e in doc.events)
+    assert [(e.ticker, e.needs_review) for e in doc.events] == [
+        ("KCHOL", True),
+        ("AKBNK", False),
+        ("ENKAI", False),
+        ("YKBNK", True),
+    ]
     _assert_quotes_ok(doc, fx.ISY_15_JAN_TEXT)
     events = _by_ticker(doc)
     # Each ticker quotes its own paragraph; the section headers and labels are stripped.
@@ -430,8 +435,8 @@ def test_isy_15_jan_plural_labels_with_per_ticker_quotes():
     assert events["AKBNK"].reason_quote == "Akbank ’ı model portföyümüze ekliyoruz."
     for fragment in ("Çıkanlar", "Eklenenler", ".IS:", "Çıkartılan"):
         assert all(fragment not in e.reason_quote for e in doc.events), fragment
-    # A listed ticker without its own paragraph in the excerpt falls back to the first
-    # paragraph; the label is explicit, so the event stays auto and only a warning is kept.
+    # A listed ticker without its own paragraph in a note that has per-ticker paragraphs
+    # falls back to the first paragraph (another company's reason): flagged and warned.
     assert events["YKBNK"].reason_quote == events["ENKAI"].reason_quote
     assert events["KCHOL"].reason_quote == events["ENKAI"].reason_quote
     assert "no per-ticker paragraph for YKBNK" in doc.warnings
@@ -447,8 +452,14 @@ def test_isy_12_mar_label_list_tolerates_trailing_ampersand():
         ("EKGYO", "removed"),
         ("THYAO", "removed"),
     ]
-    assert all(e.event_date == date(2026, 3, 12) and not e.needs_review for e in doc.events)
-    assert not doc.needs_review
+    assert all(e.event_date == date(2026, 3, 12) for e in doc.events)
+    # EKGYO and THYAO have no paragraph in this excerpt: first-paragraph fallback, flagged.
+    assert [(e.ticker, e.needs_review) for e in doc.events] == [
+        ("ENJSA", False),
+        ("AKBNK", False),
+        ("EKGYO", True),
+        ("THYAO", True),
+    ]
     _assert_quotes_ok(doc, fx.ISY_12_MAR_TEXT)
     events = _by_ticker(doc)
     assert events["AKBNK"].reason_quote.startswith("Akbank’ı model portföyümüzden")

@@ -307,8 +307,9 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
 
     ``Eklenen Şirket(ler) X.IS [& Y.IS]`` -> added, ``Çıkartılan Şirket(ler) X.IS [& Y.IS]``
     -> removed, weight sentences -> weight_up / weight_down. Reason of a listed ticker =
-    its own paragraph (``X.IS: …``) when the note has one, else the first paragraph of the
-    note (noted in ``warnings``); weight events quote the first paragraph.
+    its own paragraph (``X.IS: …``) when the note has one; else the first paragraph of the
+    note, flagged for review when other tickers do have paragraphs (a shared reason
+    otherwise); weight events quote the first paragraph.
     Event date = ``published_at`` (PDF filename date), else the dotted date in the text.
     """
     text = normalize_text(text)
@@ -330,10 +331,15 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
             for ticker in _ISY_TICKER.findall(m.group(1)):
                 if ticker in paragraphs:
                     ticker_quote = build_quote(paragraphs[ticker])
-                else:
+                    review_reason = None
+                elif paragraphs:
+                    # The note gives each ticker its own paragraph but not this one: the
+                    # first paragraph is another company's reason, so it is not trusted.
                     doc.warnings.append(f"no per-ticker paragraph for {ticker}")
-                    ticker_quote = quote
-                _add_event(doc, ticker, action, event_date, ticker_quote)
+                    ticker_quote, review_reason = quote, "no per-ticker paragraph"
+                else:
+                    ticker_quote, review_reason = quote, None  # one shared reason paragraph
+                _add_event(doc, ticker, action, event_date, ticker_quote, review_reason)
     for ticker, action, review_reason in _isy_weight_changes(body, doc):
         _add_event(doc, ticker, action, event_date, quote, review_reason)
 

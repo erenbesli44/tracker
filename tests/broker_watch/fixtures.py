@@ -39,8 +39,12 @@ ISY_1_SEP_PDF_SENTENCE = (
 )
 
 # İş Yatırım, multi-ticker note with per-ticker paragraphs and plural labels, 15 Jan 2026,
-# PDF page 1 (pypdf plain mode, read 2026-10-27; one sentence per paragraph kept; "Şirketlerler"
-# is the broker's own typo), https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/01/15_01_2026.pdf
+# PDF page 1 (pypdf plain mode, read 2026-10-27), https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/01/15_01_2026.pdf
+# Stitched excerpt, not contiguous: of the four paragraphs (ENKAI, YKBNK, KCHOL, AKBNK) it
+# keeps the first sentence of paragraphs 1 and 4 only, and moves the "Eklenenler" header
+# (which precedes KCHOL.IS in the PDF) in front of AKBNK.IS. This exercises the stripping of
+# both section headers and the first-paragraph fallback (YKBNK, KCHOL have no paragraph
+# here). The label line is verbatim ("Şirketlerler" is the broker's own typo).
 ISY_15_JAN_TEXT = (
     "Model Portföy Değişiklikler Çıkanlar ENKAI.IS: ENKAI hisselerini 24.03.2025 tarihli "
     "girişinden itibare n sağladığı mutlak % 42, göreceli %7 getiri sonrası model portföyün "
@@ -51,7 +55,10 @@ ISY_15_JAN_TEXT = (
 ISY_15_JAN_DATE = date(2026, 1, 15)
 
 # İş Yatırım, 12 Mar 2026, PDF page 1 (pypdf plain mode, read 2026-10-27): the label line ends
-# with a stray "&" before the next heading,
+# with a stray "&" before the next heading. Not contiguous: keeps the first sentence of the
+# AKBNK and ENJSA paragraphs and drops the rest of AKBNK plus the whole EKGYO and THYAO
+# paragraphs in between (so those two exercise the fallback); the label line through
+# "12.03.2026" is verbatim,
 # https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/03/12_03_2026-1.pdf
 ISY_12_MAR_TEXT = (
     "Model Portföy Değişiklikler AKBNK.IS: Akbank’ı model portföyümüzden, portföyün yüksek beta "
