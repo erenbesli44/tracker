@@ -12,6 +12,9 @@ ALL_TEXTS = [
     fx.YK_14_SEP_PAGE1,
     fx.YK_14_SEP_PAGE2,
     fx.GEDIK_UNKNOWN_TICKER_TEXT,
+    fx.ISY_15_JAN_TEXT,
+    fx.ISY_12_MAR_TEXT,
+    fx.GEDIK_5_MAY_TEXT,
 ]
 
 
@@ -403,3 +406,95 @@ def test_isy_unlisted_verb_clause_is_flagged_not_merged_silently():
         ("AKBNK", "weight_up", False),
     ]
     assert not doc.needs_review
+
+
+# ── OI-027 parser coverage: İş plural labels, per-ticker quotes, dated Gedik header ───
+
+
+def test_isy_15_jan_plural_labels_with_per_ticker_quotes():
+    doc = parsers.parse_isy_rss(fx.ISY_15_JAN_TEXT, published_at=fx.ISY_15_JAN_DATE)
+
+    assert [(e.ticker, e.action) for e in doc.events] == [
+        ("KCHOL", "added"),
+        ("AKBNK", "added"),
+        ("ENKAI", "removed"),
+        ("YKBNK", "removed"),
+    ]
+    assert all(e.event_date == date(2026, 1, 15) for e in doc.events)
+    assert [(e.ticker, e.needs_review) for e in doc.events] == [
+        ("KCHOL", True),
+        ("AKBNK", False),
+        ("ENKAI", False),
+        ("YKBNK", True),
+    ]
+    _assert_quotes_ok(doc, fx.ISY_15_JAN_TEXT)
+    events = _by_ticker(doc)
+    # Each ticker quotes its own paragraph; the section headers and labels are stripped.
+    assert events["ENKAI"].reason_quote.startswith("ENKAI hisselerini 24.03.2025 tarihli")
+    assert events["ENKAI"].reason_quote.endswith("En Çok Önerilenler listemizden çıkarıyoruz.")
+    assert events["AKBNK"].reason_quote == "Akbank ’ı model portföyümüze ekliyoruz."
+    for fragment in ("Çıkanlar", "Eklenenler", ".IS:", "Çıkartılan"):
+        assert all(fragment not in e.reason_quote for e in doc.events), fragment
+    # A listed ticker without its own paragraph in a note that has per-ticker paragraphs
+    # falls back to the first paragraph (another company's reason): flagged and warned.
+    assert events["YKBNK"].reason_quote == events["ENKAI"].reason_quote
+    assert events["KCHOL"].reason_quote == events["ENKAI"].reason_quote
+    assert "no per-ticker paragraph for YKBNK" in doc.warnings
+    assert "no per-ticker paragraph for KCHOL" in doc.warnings
+
+
+def test_isy_12_mar_label_list_tolerates_trailing_ampersand():
+    doc = parsers.parse_isy_rss(fx.ISY_12_MAR_TEXT, published_at=fx.ISY_12_MAR_DATE)
+
+    assert [(e.ticker, e.action) for e in doc.events] == [
+        ("ENJSA", "added"),
+        ("AKBNK", "removed"),
+        ("EKGYO", "removed"),
+        ("THYAO", "removed"),
+    ]
+    assert all(e.event_date == date(2026, 3, 12) for e in doc.events)
+    # EKGYO and THYAO have no paragraph in this excerpt: first-paragraph fallback, flagged.
+    assert [(e.ticker, e.needs_review) for e in doc.events] == [
+        ("ENJSA", False),
+        ("AKBNK", False),
+        ("EKGYO", True),
+        ("THYAO", True),
+    ]
+    _assert_quotes_ok(doc, fx.ISY_12_MAR_TEXT)
+    events = _by_ticker(doc)
+    assert events["AKBNK"].reason_quote.startswith("Akbank’ı model portföyümüzden")
+    assert events["ENJSA"].reason_quote == (
+        "ENJSA’yı 155TL hisse hedef fiyat ve %35 artış potansiyeli ile model portföye ekliyoruz."
+    )
+    assert "En Çok" not in events["ENJSA"].reason_quote  # the stray '&' did not leak text
+
+
+def test_isy_plural_labels_tolerate_split_words():
+    # Synthetic pypdf-style splits inside the plural label words (the real 12 Mar PDF keeps
+    # them intact); guards the _loose() use in the label patterns and the body cut.
+    text = fx.ISY_12_MAR_TEXT.replace("Çıkartılan Şirketlerler", "Çıkartıl an Şirketle rler")
+    text = text.replace("Eklenen Şirketler", "Eklen en Şirket ler")
+    doc = parsers.parse_isy_rss(text, published_at=fx.ISY_12_MAR_DATE)
+
+    assert [(e.ticker, e.action) for e in doc.events] == [
+        ("ENJSA", "added"),
+        ("AKBNK", "removed"),
+        ("EKGYO", "removed"),
+        ("THYAO", "removed"),
+    ]
+    assert _by_ticker(doc)["ENJSA"].reason_quote.endswith("model portföye ekliyoruz.")
+
+
+def test_gedik_5_may_dated_header_without_colon():
+    doc = parsers.parse_gedik_page(fx.GEDIK_5_MAY_TEXT, published_at=date(2026, 5, 5))
+
+    assert [(e.ticker, e.action, e.event_date, e.needs_review) for e in doc.events] == [
+        ("KCAER", "added", date(2026, 5, 5), False)
+    ]
+    assert not doc.needs_review
+    _assert_quotes_ok(doc, fx.GEDIK_5_MAY_TEXT)
+    quote = doc.events[0].reason_quote
+    assert quote.startswith("Kocaer Çelik’i model portföyümüze ekliyoruz.")
+    assert "Model Portföy Güncellemesi" not in quote  # the title belongs to the header
+    # The date comes from the title, as for the colon form.
+    assert parsers.parse_gedik_page(fx.GEDIK_5_MAY_TEXT).events[0].event_date == date(2026, 5, 5)

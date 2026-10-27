@@ -38,6 +38,47 @@ ISY_1_SEP_PDF_SENTENCE = (
     "ağ ırlığını artırıyoruz."
 )
 
+# İş Yatırım, multi-ticker note with per-ticker paragraphs and plural labels, 15 Jan 2026,
+# PDF page 1 (pypdf plain mode, read 2026-10-27), https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/01/15_01_2026.pdf
+# Stitched excerpt, not contiguous: of the four paragraphs (ENKAI, YKBNK, KCHOL, AKBNK) it
+# keeps the first sentence of paragraphs 1 and 4 only, and moves the "Eklenenler" header
+# (which precedes KCHOL.IS in the PDF) in front of AKBNK.IS. This exercises the stripping of
+# both section headers and the first-paragraph fallback (YKBNK, KCHOL have no paragraph
+# here). The label line is verbatim ("Şirketlerler" is the broker's own typo).
+ISY_15_JAN_TEXT = (
+    "Model Portföy Değişiklikler Çıkanlar ENKAI.IS: ENKAI hisselerini 24.03.2025 tarihli "
+    "girişinden itibare n sağladığı mutlak % 42, göreceli %7 getiri sonrası model portföyün "
+    "betasını artırm a amaçlı En Çok Önerilenler listemizden çıkarıyoruz. Eklenenler AKBNK.IS: "
+    "Akbank ’ı model portföyümüze ekliyoruz. Çıkartılan Şirketlerler ENKAI.IS & YKBNK.IS "
+    "Eklenen Şirketler KCHOL.IS & AKBNK.IS"
+)
+ISY_15_JAN_DATE = date(2026, 1, 15)
+
+# İş Yatırım, 12 Mar 2026, PDF page 1 (pypdf plain mode, read 2026-10-27): the label line ends
+# with a stray "&" before the next heading. Not contiguous: keeps the first sentence of the
+# AKBNK and ENJSA paragraphs and drops the rest of AKBNK plus the whole EKGYO and THYAO
+# paragraphs in between (so those two exercise the fallback); the label line through
+# "12.03.2026" is verbatim,
+# https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/03/12_03_2026-1.pdf
+ISY_12_MAR_TEXT = (
+    "Model Portföy Değişiklikler AKBNK.IS: Akbank’ı model portföyümüzden, portföyün yüksek beta "
+    "maruziyetini azaltmak amacıyla çıkarıyoruz. ENJSA.IS: ENJSA’yı 155TL hisse hedef fiyat ve "
+    "%35 artış potansiyeli ile model portföye ekliyoruz. Çıkartılan Şirketlerler AKBNK.IS & "
+    "EKGYO.IS & THYAO.IS Eklenen Şirketler ENJSA.IS & En Çok Önerilenler Listesinde "
+    "Değişiklikler 12.03.2026"
+)
+ISY_12_MAR_DATE = date(2026, 3, 12)
+
+# Gedik Yatırım, single-change note whose only header is the dated title (no colon), 5 May 2026,
+# PDF page 1 (pypdf plain mode, read 2026-10-27),
+# https://cdn.gedik.com/media/media/mn4cx25o/modelportfoyguncellemesi_05052026-kcaer-in.pdf
+GEDIK_5_MAY_TEXT = (
+    "Kocaer Çelik’i (KCAER) ekliyoruz 05 Mayıs 2026 Model Portföy Güncellemesi Kocaer Çelik’i "
+    "model portföyümüze ekliyoruz. 2Ç’deki yüksek baz etkisi kısa vadeli momentum’u sınırlasa "
+    "da, 2Y’deki düşük baz daha destekleyici bir kârlılık patikasına işaret ediyor; ürün "
+    "fiyatlarındaki son toparlanmanın 2Ç –3Ç finansallarına yansımasını bekliyoruz."
+)
+
 # Gedik Yatırım, "Model Portföy Güncellemesi", 22 Sep 2026, PDF page 1 (reasons trimmed),
 # https://cdn.gedik.com/media/media/brnjmjkx/modelportfoyguncellemesi_22092026.pdf
 GEDIK_22_SEP_TEXT = (

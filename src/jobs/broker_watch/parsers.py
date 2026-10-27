@@ -164,10 +164,9 @@ def build_quote(body: str, limit: int = MAX_QUOTE_CHARS) -> str:
 
 
 _DOTTED_DATE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b")
-_TURKISH_DATE = re.compile(
-    r"\b(\d{1,2})\s+(Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık)"
-    r"\s+(\d{4})\b"
-)
+_TURKISH_MONTH_NAMES = "Ocak|Şubat|Mart|Nisan|Mayıs|Haziran|Temmuz|Ağustos|Eylül|Ekim|Kasım|Aralık"
+_TURKISH_DATE_RE = r"\d{1,2}\s+(?:" + _TURKISH_MONTH_NAMES + r")\s+\d{4}"
+_TURKISH_DATE = re.compile(r"\b(\d{1,2})\s+(" + _TURKISH_MONTH_NAMES + r")\s+(\d{4})\b")
 
 
 def _safe_date(year: int, month: int, day: int) -> date | None:
@@ -242,16 +241,43 @@ def _add_event(
 # ── İş Yatırım ────────────────────────────────────────────────────────────────
 
 _ISY_HEADING = re.compile(_loose("Model Portföy Değişiklikler"))
-_ISY_ADDED = re.compile(_loose("Eklenen Şirket") + r"\s+([A-Z0-9]{4,5})\.IS")
-_ISY_REMOVED = re.compile(_loose("Çıkartılan Şirket") + r"\s+([A-Z0-9]{4,5})\.IS")
+_ISY_TICKER = re.compile(r"([A-Z0-9]{4,5})\.IS")
+# One or more tickers: "SAHOL.IS", "ENKAI.IS & YKBNK.IS", "X.IS, Y.IS ve Z.IS"; a trailing
+# joiner is tolerated ("Eklenen Şirketler ENJSA.IS & En Çok Önerilenler", 12 Mar 2026).
+_ISY_TICKER_LIST = r"(?:[A-Z0-9]{4,5}\.IS\s*(?:&|,|ve)?\s*)+"
+
+
+def _isy_label(words: str) -> str:
+    """``_loose`` pattern of a list label in the singular ('Eklenen Şirket'), the plural
+    ('Eklenen Şirketler') or the broker's doubled plural ('Çıkartılan Şirketlerler', as
+    printed in every multi-ticker note of 2026)."""
+    return _loose(words) + r"(?: ?l ?e ?r){0,2}"
+
+
+_ISY_ADDED = re.compile(_isy_label("Eklenen Şirket") + r"\s+(" + _ISY_TICKER_LIST + ")")
+_ISY_REMOVED = re.compile(_isy_label("Çıkartılan Şirket") + r"\s+(" + _ISY_TICKER_LIST + ")")
 _ISY_BODY_END = re.compile(
     r"\s(?:"
     + "|".join(
-        _loose(p) for p in ("Eklenen Şirket", "Çıkartılan Şirket", "En Çok Önerilenler Listesinde")
+        (
+            _isy_label("Eklenen Şirket"),
+            _isy_label("Çıkartılan Şirket"),
+            _loose("En Çok Önerilenler Listesinde"),
+        )
     )
     + r")\b"
 )
-_ISY_TICKER_LABEL = re.compile(r"^(?:[A-Z0-9]{4,5}\.IS\s*(?:&|,|ve)?\s*)+:\s*")
+# Paragraph label: "AKBNK.IS & SAHOL.IS: …" (one paragraph for both tickers), or with its
+# section header, "Çıkanlar ENKAI.IS: …" / "Eklenenler KCHOL.IS: …" (15 Jan 2026).
+_ISY_TICKER_LABEL = re.compile(
+    r"(?<!\S)(?:(?:"
+    + _loose("Çıkanlar")
+    + "|"
+    + _loose("Eklenenler")
+    + r")\s+)?("
+    + _ISY_TICKER_LIST
+    + r"):\s*"
+)
 # Weight sentences: "<X> ağırlığını %7'ye indirirken", "... ağırlıklarını artırıyoruz";
 # the verb stem decides the direction. "ağrılığını" is the broker's own typo.
 _WEIGHT_NOUN_FORMS = ("ağırlığını", "ağrılığını", "ağırlıklarını")
@@ -279,8 +305,11 @@ _GENITIVE = re.compile(r"[’']n?[ıiuü]n\b")
 def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocument:
     """İş Yatırım change note (PDF page 1).
 
-    ``Eklenen Şirket X.IS`` -> added, ``Çıkartılan Şirket X.IS`` -> removed, weight
-    sentences -> weight_up / weight_down. Reason = first paragraph of the note.
+    ``Eklenen Şirket(ler) X.IS [& Y.IS]`` -> added, ``Çıkartılan Şirket(ler) X.IS [& Y.IS]``
+    -> removed, weight sentences -> weight_up / weight_down. Reason of a listed ticker =
+    its own paragraph (``X.IS: …``) when the note has one; else the first paragraph of the
+    note, flagged for review when other tickers do have paragraphs (a shared reason
+    otherwise); weight events quote the first paragraph.
     Event date = ``published_at`` (PDF filename date), else the dotted date in the text.
     """
     text = normalize_text(text)
@@ -290,20 +319,45 @@ def parse_isy_rss(text: str, *, published_at: date | None = None) -> ParsedDocum
 
     heading = _ISY_HEADING.search(page1)
     body = page1[heading.end() :] if heading else page1
-    body = _ISY_BODY_END.split(body, maxsplit=1)[0]
-    body = _ISY_TICKER_LABEL.sub("", body.strip())
-    quote = build_quote(body)
+    body = _ISY_BODY_END.split(body, maxsplit=1)[0].strip()
+    paragraphs = _isy_paragraphs(body)
+    first_label = _ISY_TICKER_LABEL.match(body)
+    body = body[first_label.end() :] if first_label else body
+    next_label = _ISY_TICKER_LABEL.search(body)
+    quote = build_quote(body[: next_label.start()] if next_label else body)  # first paragraph
 
-    for m in _ISY_ADDED.finditer(page1):
-        _add_event(doc, m.group(1), ADDED, event_date, quote)
-    for m in _ISY_REMOVED.finditer(page1):
-        _add_event(doc, m.group(1), REMOVED, event_date, quote)
+    for pattern, action in ((_ISY_ADDED, ADDED), (_ISY_REMOVED, REMOVED)):
+        for m in pattern.finditer(page1):
+            for ticker in _ISY_TICKER.findall(m.group(1)):
+                if ticker in paragraphs:
+                    ticker_quote = build_quote(paragraphs[ticker])
+                    review_reason = None
+                elif paragraphs:
+                    # The note gives each ticker its own paragraph but not this one: the
+                    # first paragraph is another company's reason, so it is not trusted.
+                    doc.warnings.append(f"no per-ticker paragraph for {ticker}")
+                    ticker_quote, review_reason = quote, "no per-ticker paragraph"
+                else:
+                    ticker_quote, review_reason = quote, None  # one shared reason paragraph
+                _add_event(doc, ticker, action, event_date, ticker_quote, review_reason)
     for ticker, action, review_reason in _isy_weight_changes(body, doc):
         _add_event(doc, ticker, action, event_date, quote, review_reason)
 
     if not doc.events:
         doc.warnings.append("no portfolio change found on page 1")
     return doc
+
+
+def _isy_paragraphs(body: str) -> dict[str, str]:
+    """Each ticker's own paragraph: the text after its ``X.IS:`` label (``X.IS & Y.IS:``
+    serves both) up to the next label; ``body`` is already cut before the list labels."""
+    labels = list(_ISY_TICKER_LABEL.finditer(body))
+    paragraphs: dict[str, str] = {}
+    for i, m in enumerate(labels):
+        end = labels[i + 1].start() if i + 1 < len(labels) else len(body)
+        for ticker in _ISY_TICKER.findall(m.group(1)):
+            paragraphs.setdefault(ticker, body[m.end() : end])
+    return paragraphs
 
 
 def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str, str | None]]:
@@ -443,8 +497,20 @@ def parse_yk_json(text: str, *, published_at: date | None = None) -> ParsedDocum
 
 # ── Gedik Yatırım ─────────────────────────────────────────────────────────────
 
+# "<Name> (<TICKER>) çıkarıyoruz: <reason>" in the body, or the dated title of a
+# single-change note, "<Name> (<TICKER>) ekliyoruz 05 Mayıs 2026 Model Portföy Güncellemesi
+# <reason>" (5 and 7 May 2026): the title belongs to the header, so the quote starts at
+# the reason either way.
 _GEDIK_HEADER = re.compile(
-    r"\(([A-Z0-9]{3,6})\)\s*(" + _loose("çıkarıyoruz") + "|" + _loose("ekliyoruz") + r")\s*:"
+    r"\(([A-Z0-9]{3,6})\)\s*("
+    + _loose("çıkarıyoruz")
+    + "|"
+    + _loose("ekliyoruz")
+    + r")(?:\s*:|\s+"
+    + _TURKISH_DATE_RE
+    + r"\b(?:\s+"
+    + _loose("Model Portföy Güncellemesi")
+    + r")?)"
 )
 _GEDIK_TABLE_HEAD = re.compile(
     r"Şirket Adı\s+Hisse Kodu\s+Hedef Fiyat\s+Potansiyel Getiri\s+BIST-100 Ağırlık \(%\)"
@@ -455,8 +521,9 @@ _GEDIK_TABLE_ROW = re.compile(r"\b([A-Z0-9]{4,5})\s+[\d.,]+\s*₺\s+%-?[\d.,]+\s
 def parse_gedik_page(text: str, *, published_at: date | None = None) -> ParsedDocument:
     """Gedik 'Model Portföy Güncellemesi' PDF (page 1).
 
-    ``<Name> (<TICKER>) çıkarıyoruz: <reason>`` -> removed, ``... ekliyoruz: ...`` -> added.
-    Event date = the Turkish date in the title, else ``published_at``.
+    ``<Name> (<TICKER>) çıkarıyoruz: <reason>`` -> removed, ``... ekliyoruz: ...`` -> added;
+    the colon may also be a dated title (``... ekliyoruz 05 Mayıs 2026 Model Portföy
+    Güncellemesi``). Event date = the Turkish date in the title, else ``published_at``.
     """
     text = normalize_text(text)
     doc = ParsedDocument(text=text)
@@ -471,7 +538,9 @@ def parse_gedik_page(text: str, *, published_at: date | None = None) -> ParsedDo
         _add_event(doc, m.group(1), action, event_date, build_quote(page1[m.end() : end]))
 
     if not headers:
-        doc.warnings.append("no '(TICKER) çıkarıyoruz/ekliyoruz:' header found on page 1")
+        doc.warnings.append(
+            "no '(TICKER) çıkarıyoruz/ekliyoruz' header (colon or dated title) found on page 1"
+        )
     return doc
 
 
