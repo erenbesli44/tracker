@@ -442,9 +442,11 @@ def test_run_once_counts_redirect_to_disallowed_path_as_robots_skip(session: Ses
 def test_run_once_closes_the_http_fetcher_it_creates(session: Session, monkeypatch):
     site = FakeSites()  # every URL answers 404: each source fails, the run still finishes
     created: list[HttpFetcher] = []
+    created_kwargs: list[dict] = []
 
-    def make_fetcher(user_agent: str) -> HttpFetcher:
-        created.append(HttpFetcher(user_agent, transport=httpx.MockTransport(site)))
+    def make_fetcher(user_agent: str, **kwargs) -> HttpFetcher:
+        created_kwargs.append(kwargs)
+        created.append(HttpFetcher(user_agent, transport=httpx.MockTransport(site), **kwargs))
         return created[-1]
 
     monkeypatch.setattr(service, "HttpFetcher", make_fetcher)
@@ -452,6 +454,7 @@ def test_run_once_closes_the_http_fetcher_it_creates(session: Session, monkeypat
 
     assert summary.status == "failed" and summary.sources_failed == 3
     assert len(created) == 1
+    assert created_kwargs == [{"since": None, "request_delay": 0.0}]  # a normal run: no delay
     assert all(r.headers["User-Agent"] == UA for r in site.requests)
     with pytest.raises(RuntimeError, match="closed"):
         created[0].discover(load_broker_config().brokers[2])
@@ -477,3 +480,81 @@ def test_run_once_skips_when_max_runs_per_day_is_reached(session: Session):
     # Skipped runs do not count towards the limit.
     config.defaults.max_runs_per_day = 3
     assert service.run_once(engine, config, fetcher=fetcher).status == "success"
+
+
+# ── Step 3: backfill mode ─────────────────────────────────────────────────────
+
+
+def test_backfill_bypasses_max_runs_per_day_and_marks_the_run(session: Session):
+    engine = session.get_bind()
+    config = load_broker_config()
+    fetcher = FakeFetcher(_default_docs())
+    service.run_once(engine, config, fetcher=fetcher)
+    service.run_once(engine, config, fetcher=fetcher)
+    assert service.run_once(engine, config, fetcher=fetcher).status == "skipped_rate_limit"
+
+    backfill = service.run_once(engine, config, fetcher=fetcher, since=date(2026, 1, 1))
+
+    assert backfill.status == "success" and backfill.sources_scanned == 3
+    run = session.get(BrokerWatchRun, backfill.run_id)
+    assert run.status == "success" and run.errors_count == 0
+    assert json.loads(run.error_details) == ["backfill since 2026-01-01"]
+    assert _count(session, BrokerDocument) == 5  # idempotent: nothing stored twice
+
+    # The marker goes first; source errors follow it.
+    failing = FakeFetcher(_default_docs(), texts={**TEXTS, GEDIK_PAGE: "<p>no table</p>"})
+    partial = service.run_once(engine, config, fetcher=failing, since=date(2026, 1, 1))
+    assert partial.status == "partial_fail"
+    details = json.loads(session.get(BrokerWatchRun, partial.run_id).error_details)
+    assert details[0] == "backfill since 2026-01-01" and len(details) == 2
+
+
+def test_backfill_document_cap_fails_the_source_without_fetching(session: Session):
+    engine = session.get_bind()
+    fetcher = FakeFetcher(_default_docs())  # İş 2, Yapı Kredi 1, Gedik 2 documents
+
+    summary = service.run_once(
+        engine, load_broker_config(), fetcher=fetcher, since=date(2026, 1, 1), max_documents=4
+    )
+
+    results = {r.broker_slug: r for r in summary.sources}
+    assert results["is-yatirim"].status == "success"
+    assert results["yapi-kredi-yatirim"].status == "success"
+    gedik = results["gedik-yatirim"]  # 2 documents left, 1 of the cap remaining
+    assert gedik.status == "failed" and gedik.documents_new == 0 and gedik.documents_seen == 2
+    assert gedik.error_detail == (
+        "discover: 2 documents exceed the remaining cap of 1; nothing fetched"
+    )
+    assert fetcher.fetched == [ISY_20_OCT.file_url, ISY_1_SEP.file_url, YK_14_SEP.file_url]
+    assert summary.status == "partial_fail" and summary.sources_failed == 1
+    stored = {r.broker_slug: r for r in session.exec(select(BrokerWatchSourceResult)).all()}
+    assert (stored["gedik-yatirim"].status, stored["gedik-yatirim"].documents_seen) == ("failed", 2)
+    assert _count(session, BrokerDocument) == 3
+
+    # Without a cap nothing is held back.
+    summary = service.run_once(
+        engine, load_broker_config(), fetcher=fetcher, since=date(2026, 1, 1)
+    )
+    assert summary.status == "success" and _count(session, BrokerDocument) == 5
+
+
+def test_backfill_builds_the_http_fetcher_with_since_and_delay(session: Session, monkeypatch):
+    site = FakeSites()
+    created_kwargs: list[dict] = []
+
+    def make_fetcher(user_agent: str, **kwargs) -> HttpFetcher:
+        created_kwargs.append(kwargs)
+        return HttpFetcher(user_agent, transport=httpx.MockTransport(site), **kwargs)
+
+    monkeypatch.setattr(service, "HttpFetcher", make_fetcher)
+    monkeypatch.setattr(service, "BACKFILL_REQUEST_DELAY", 0.25)  # not slept: every URL is 404
+    config = load_broker_config()
+
+    service.run_once(session.get_bind(), config, since=date(2026, 1, 1))
+    service.run_once(session.get_bind(), config, since=date(2026, 1, 1), request_delay=0.0)
+
+    assert created_kwargs == [
+        {"since": date(2026, 1, 1), "request_delay": 0.25},
+        {"since": date(2026, 1, 1), "request_delay": 0.0},
+    ]
+    assert all(r.headers["User-Agent"] == UA for r in site.requests)

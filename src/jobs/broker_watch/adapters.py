@@ -9,6 +9,11 @@ robots.txt is fetched once per host and run and applied to every outgoing reques
 (redirect hops and POSTs included) for the configured User-Agent, with ``*``/``$``
 wildcards (plan criterion F). A missing robots.txt (4xx) allows; an unreachable one
 or a 5xx disallows the host for this run (RFC 9309 §2.3.1.4).
+
+Backfill mode (``since``): discovery follows the İş feed pages until a page holds
+only items published before ``since`` (hard cap ``BACKFILL_MAX_PAGES``) and drops
+documents dated before ``since`` on every source; ``request_delay`` seconds are
+slept between live requests as a courtesy.
 """
 
 import hashlib
@@ -16,8 +21,10 @@ import html
 import io
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import date
+from email.utils import parsedate_to_datetime
 from typing import Protocol
 from urllib.parse import urlencode, urlsplit
 from xml.etree import ElementTree
@@ -34,6 +41,7 @@ logger = logging.getLogger(__name__)
 CHANGE_NOTE = "change_note"
 COMPOSITION = "composition"
 MAX_PDF_BYTES = 25 * 1024 * 1024  # change notes are well under 1 MB; larger files are refused
+BACKFILL_MAX_PAGES = 20  # İş feed pages a backfill follows at most, whatever ``since``
 
 YK_RESEARCH_PAGE = "https://www.ykyatirim.com.tr/hizmetler/arastirma"
 _RSS_CONTENT_NS = "{http://purl.org/rss/1.0/modules/content/}"
@@ -103,6 +111,17 @@ def _with_query(base: str, **params: object) -> str:
     return f"{base}{'&' if urlsplit(base).query else '?'}{urlencode(params)}"
 
 
+def _rss_pubdate(item: ElementTree.Element) -> date | None:
+    """Date of an RSS item's RFC 822 ``pubDate``; None when absent or unparseable."""
+    raw = item.findtext("pubDate")
+    if not raw:
+        return None
+    try:
+        return parsedate_to_datetime(raw).date()
+    except (TypeError, ValueError):
+        return None
+
+
 class HttpFetcher:
     """httpx-based discovery and download with the configured User-Agent.
 
@@ -114,14 +133,22 @@ class HttpFetcher:
         user_agent: str,
         timeout: float = 30.0,
         transport: httpx.BaseTransport | None = None,
+        *,
+        since: date | None = None,
+        request_delay: float = 0.0,
     ) -> None:
+        """``since`` switches discovery to backfill mode (module docstring);
+        ``request_delay`` is slept before every request after the first."""
         self._user_agent = user_agent
+        self._since = since
+        self._request_delay = request_delay
+        self.requests_sent = 0
         self._client = httpx.Client(
             headers={"User-Agent": user_agent},
             timeout=timeout,
             follow_redirects=True,
             transport=transport,
-            event_hooks={"request": [self._robots_hook]},
+            event_hooks={"request": [self._request_hook]},
         )
         self._pages: dict[str, str] = {}  # HTML fetched during discovery, reused by fetch()
         self._robots: dict[str, RobotsRules | None] = {}  # host -> rules (None: allow all)
@@ -134,6 +161,7 @@ class HttpFetcher:
 
     def close(self) -> None:
         self._client.close()
+        logger.info("HTTP client closed after %d request(s)", self.requests_sent)
 
     # ── SourceFetcher ─────────────────────────────────────────────────────────
 
@@ -183,11 +211,19 @@ class HttpFetcher:
                 chunks.append(chunk)
         return b"".join(chunks)
 
-    def _robots_hook(self, request: httpx.Request) -> None:
+    def _request_hook(self, request: httpx.Request) -> None:
         """httpx request hook: every outgoing request (redirect hops and POSTs included)
-        must be allowed by the host's robots.txt; robots.txt itself is exempt."""
+        must be allowed by the host's robots.txt (robots.txt itself is exempt); then the
+        courtesy delay, if any, is slept and the request counted."""
         if not request.url.path.endswith("/robots.txt"):
             self._check_robots(str(request.url))
+        if self._request_delay and self.requests_sent:
+            time.sleep(self._request_delay)
+        self.requests_sent += 1
+
+    def _within_since(self, published_at: date | None) -> bool:
+        """False only for a dated document older than the backfill's ``since``."""
+        return self._since is None or published_at is None or published_at >= self._since
 
     def _check_robots(self, url: str) -> None:
         parts = urlsplit(url)
@@ -225,10 +261,13 @@ class HttpFetcher:
 
     def _discover_isy(self, broker: WatchedBroker) -> list[DiscoveredDocument]:
         """RSS items -> PDF links in their bodies, following ``?paged=N`` up to
-        ``broker.max_pages``. The PDF is the record: posts share a 'latest change' body,
-        so documents are deduplicated by PDF URL (and later sha256)."""
+        ``broker.max_pages`` (backfill: up to BACKFILL_MAX_PAGES, until a page's items
+        all predate ``since``; older items are skipped). The PDF is the record: posts
+        share a 'latest change' body, so documents are deduplicated by PDF URL (and
+        later sha256)."""
         docs: dict[str, DiscoveredDocument] = {}
-        for page in range(1, broker.max_pages + 1):
+        max_pages = BACKFILL_MAX_PAGES if self._since else broker.max_pages
+        for page in range(1, max_pages + 1):
             url = broker.url if page == 1 else _with_query(broker.url, paged=page)
             try:
                 root = ElementTree.fromstring(self._get(url).content)
@@ -240,7 +279,11 @@ class HttpFetcher:
             items = list(root.iter("item"))
             if not items:
                 break
-            for item in items:
+            recent = [item for item in items if self._within_since(_rss_pubdate(item))]
+            if self._since and not recent:
+                logger.info("İş feed page %d: every item predates %s, stopping", page, self._since)
+                break
+            for item in recent:
                 link = item.findtext("link") or url
                 body = " ".join(
                     item.findtext(tag) or "" for tag in ("description", f"{_RSS_CONTENT_NS}encoded")
@@ -278,6 +321,9 @@ class HttpFetcher:
             ):
                 continue
             posted = item.get("reportPostTime") or ""
+            published_at = date.fromisoformat(posted[:10]) if posted else None
+            if not self._within_since(published_at):
+                continue
             docs.append(
                 DiscoveredDocument(
                     kind=CHANGE_NOTE,
@@ -285,7 +331,7 @@ class HttpFetcher:
                     file_url=_with_query(
                         f"{broker.site_url}/DetailPage/GetFilePath", url=item["filePath"]
                     ),
-                    published_at=date.fromisoformat(posted[:10]) if posted else None,
+                    published_at=published_at,
                 )
             )
         return docs
@@ -299,18 +345,31 @@ class HttpFetcher:
                 kind=COMPOSITION, source_url=broker.url, file_url=None, published_at=None
             )
         ]
+        skipped_old = 0
         for pdf_url in dict.fromkeys(html.unescape(u) for u in _PDF_URL.findall(page)):
             name = pdf_url.rsplit("/", 1)[-1].lower().replace("-", "").replace("_", "")
             if "modelportfoy" not in name:
                 continue
             if "strateji" in name:
                 continue  # monthly strategy PDF: no parse rule yet (plan, Sources table)
+            published_at = date_from_filename(pdf_url)
+            if not self._within_since(published_at):
+                skipped_old += 1
+                continue
             docs.append(
                 DiscoveredDocument(
                     kind=CHANGE_NOTE,
                     source_url=broker.url,
                     file_url=pdf_url,
-                    published_at=date_from_filename(pdf_url),
+                    published_at=published_at,
                 )
+            )
+        if self._since:
+            logger.info(
+                "Gedik page lists %d update PDF(s): %d dated from %s on, %d older skipped",
+                len(docs) - 1 + skipped_old,
+                len(docs) - 1,
+                self._since,
+                skipped_old,
             )
         return docs

@@ -5,7 +5,8 @@ and is attributed to its source. Whole documents are never copied (copyright).
 Table rows carry placeholder numbers, not the brokers' figures.
 """
 
-from datetime import date
+from datetime import UTC, date, datetime
+from email.utils import format_datetime
 
 # İş Yatırım, "En Çok Önerilenler Listesinde Değişiklikler", 20 Oct 2026, PDF page 1,
 # https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/10/20_10_2026.pdf
@@ -114,13 +115,19 @@ ISY_PDF_1_SEP = "https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/09/0
 ISY_PDF_5_FEB = "https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/02/05_02_2026.pdf"
 
 
-def _rss(items: list[tuple[str, str | None]]) -> str:
-    """WordPress-style RSS; each item is (post link, PDF URL or None)."""
+def _pubdate(day: date) -> str:
+    """RFC 822 pubDate as WordPress writes it, e.g. 'Tue, 20 Oct 2026 07:30:00 +0000'."""
+    return format_datetime(datetime(day.year, day.month, day.day, 7, 30, tzinfo=UTC))
+
+
+def _rss(items: list[tuple]) -> str:
+    """WordPress-style RSS; each item is (post link, PDF URL or None[, pubDate text])."""
     body = ""
-    for link, pdf in items:
+    for link, pdf, *rest in items:
         inner = f'<p>Son değişiklik</p><a href="{pdf}">PDF</a>' if pdf else "<p>Duyuru</p>"
+        pubdate = f"<pubDate>{rest[0]}</pubDate>" if rest else ""
         body += (
-            f"<item><title>Model Portföy Değişiklikleri</title><link>{link}</link>"
+            f"<item><title>Model Portföy Değişiklikleri</title><link>{link}</link>{pubdate}"
             f"<description>Özet</description><content:encoded><![CDATA[{inner}]]>"
             "</content:encoded></item>"
         )
@@ -142,6 +149,28 @@ ISY_FEED_PAGE_1 = _rss(
 ISY_FEED_PAGE_2 = _rss(
     [("https://arastirma.isyatirim.com.tr/2026/02/05/degisiklik-40/", ISY_PDF_5_FEB)]
 )
+
+# Backfill: dated feed pages, newest first; page 2 straddles 2026-01-01, page 3 is older.
+ISY_PDF_15_DEC_2025 = "https://arastirma.isyatirim.com.tr/wp-content/uploads/2025/12/15_12_2025.pdf"
+ISY_PDF_1_DEC_2025 = "https://arastirma.isyatirim.com.tr/wp-content/uploads/2025/12/01_12_2025.pdf"
+_ISY_POST = "https://arastirma.isyatirim.com.tr/{}/degisiklik-{}/"
+ISY_BACKFILL_PAGES = {
+    1: _rss(
+        [
+            (_ISY_POST.format("2026/10/20", 47), ISY_PDF_20_OCT, _pubdate(date(2026, 10, 20))),
+            (_ISY_POST.format("2026/09/01", 45), ISY_PDF_1_SEP, _pubdate(date(2026, 9, 1))),
+        ]
+    ),
+    2: _rss(
+        [
+            (_ISY_POST.format("2026/02/05", 40), ISY_PDF_5_FEB, _pubdate(date(2026, 2, 5))),
+            (_ISY_POST.format("2025/12/15", 39), ISY_PDF_15_DEC_2025, _pubdate(date(2025, 12, 15))),
+        ]
+    ),
+    3: _rss(
+        [(_ISY_POST.format("2025/12/01", 38), ISY_PDF_1_DEC_2025, _pubdate(date(2025, 12, 1)))]
+    ),
+}
 
 YK_RESEARCH_PAGE = "https://www.ykyatirim.com.tr/hizmetler/arastirma"
 YK_REPORTS_URL = "https://www.ykyatirim.com.tr/DetailPage/GetResearchReports"
@@ -167,6 +196,17 @@ YK_REPORTS_JSON = [
     },
 ]
 
+# Backfill: the 14 Sep report plus an older public "Model Portföy" entry.
+YK_REPORTS_JSON_BACKFILL = [
+    *YK_REPORTS_JSON,
+    {
+        "isPublic": True,
+        "reportTypeName": "Model Portföy",
+        "filePath": "/Files/Research/2025-12-01 Model Portföy.pdf",
+        "reportPostTime": "2025-12-01T09:00:00",
+    },
+]
+
 GEDIK_PAGE_URL = "https://gedik.com/analiz/model-portfoy/hisse-model-portfoy"
 GEDIK_PDF_22_SEP = (
     "https://cdn.gedik.com/media/media/brnjmjkx/ModelPortfoyGuncellemesi_22_09_2026_abcd1234.pdf"
@@ -182,6 +222,13 @@ GEDIK_PAGE_HTML = GEDIK_COMPOSITION_HTML.replace(
         for url in (GEDIK_PDF_22_SEP, GEDIK_PDF_6_AUG, GEDIK_PDF_MONTHLY, GEDIK_PDF_WEEKLY)
     )
     + "</ul>",
+)
+# Backfill: the same page with one update PDF dated before 2026.
+GEDIK_PDF_15_DEC_2025 = (
+    "https://cdn.gedik.com/media/media/zz6/modelportfoyguncellemesi_15122025.pdf"
+)
+GEDIK_PAGE_HTML_BACKFILL = GEDIK_PAGE_HTML.replace(
+    "</ul>", f'<li><a href="{GEDIK_PDF_15_DEC_2025}">eski</a></li></ul>'
 )
 
 
