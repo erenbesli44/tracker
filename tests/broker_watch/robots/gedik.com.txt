@@ -1,0 +1,4 @@
+User-Agent: *
+Disallow: /arama?search
+Allow: /
+Sitemap: https://gedik.com/sitemap.xml
