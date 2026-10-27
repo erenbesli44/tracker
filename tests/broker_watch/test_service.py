@@ -3,6 +3,8 @@
 import json
 from datetime import date
 
+import httpx
+import pytest
 from sqlalchemy import func
 from sqlmodel import Session, select
 
@@ -12,9 +14,10 @@ from src.jobs.broker_watch.adapters import (
     COMPOSITION,
     DiscoveredDocument,
     FetchedDocument,
+    HttpFetcher,
     sha256_hex,
 )
-from src.jobs.broker_watch.config import WatchedBroker, load_broker_config
+from src.jobs.broker_watch.config import BrokerWatchConfig, WatchedBroker, load_broker_config
 from src.jobs.broker_watch.models import (
     Broker,
     BrokerDocument,
@@ -24,6 +27,7 @@ from src.jobs.broker_watch.models import (
     ModelPortfolioSnapshot,
 )
 from tests.broker_watch import fixtures as fx
+from tests.broker_watch.test_adapters import UA, FakeSites
 
 
 def _doc(kind: str, url: str, published_at: date | None = None) -> DiscoveredDocument:
@@ -223,3 +227,253 @@ def test_source_failure_is_recorded_and_does_not_stop_the_run(session: Session):
     results = {r.broker_slug: r for r in session.exec(select(BrokerWatchSourceResult)).all()}
     assert results["yapi-kredi-yatirim"].status == "failed"
     assert results["is-yatirim"].status == "success"
+
+
+# ── Step 2: snapshot basis, consistency check, robots, rate limit, client close ──
+
+
+def _one_broker_config(slug: str) -> BrokerWatchConfig:
+    config = load_broker_config()
+    return BrokerWatchConfig(
+        brokers=[b for b in config.brokers if b.slug == slug], defaults=config.defaults
+    )
+
+
+def _seed(session: Session, slug: str = "gedik-yatirim") -> tuple[Broker, BrokerDocument]:
+    broker = Broker(slug=slug, name=slug, site_url="https://example.com", adapter="gedik_page")
+    session.add(broker)
+    session.commit()
+    document = BrokerDocument(
+        broker_id=broker.id,
+        kind=CHANGE_NOTE,
+        source_url="https://example.com/note.pdf",
+        sha256=sha256_hex(slug.encode("utf-8")),
+        text="metin",
+    )
+    session.add(document)
+    session.commit()
+    return broker, document
+
+
+def _event(session, broker, document, ticker, action, day) -> ModelPortfolioEvent:
+    event = ModelPortfolioEvent(
+        broker_id=broker.id,
+        document_id=document.id,
+        ticker=ticker,
+        action=action,
+        event_date=day,
+        reason_quote="metin",
+    )
+    session.add(event)
+    session.commit()
+    return event
+
+
+def _snapshot(session, broker, document, day, tickers, basis="current") -> None:
+    session.add(
+        ModelPortfolioSnapshot(
+            broker_id=broker.id,
+            document_id=document.id,
+            as_of=day,
+            basis=basis,
+            items_json=json.dumps([{"ticker": t, "entry_date": None} for t in tickers]),
+        )
+    )
+    session.commit()
+
+
+def test_snapshot_basis_is_pre_change_for_yk_and_current_for_gedik(session: Session):
+    service.run_once(session.get_bind(), load_broker_config(), fetcher=FakeFetcher(_default_docs()))
+
+    brokers = {b.slug: b for b in session.exec(select(Broker)).all()}
+    basis = {s.broker_id: s.basis for s in session.exec(select(ModelPortfolioSnapshot)).all()}
+    assert basis[brokers["yapi-kredi-yatirim"].id] == "pre_change"
+    assert basis[brokers["gedik-yatirim"].id] == "current"
+
+
+def test_consistency_check_keeps_yk_event_with_same_day_pre_change_snapshot(session: Session):
+    broker, document = _seed(session, "yapi-kredi-yatirim")
+    event = _event(session, broker, document, "VAKBN", "removed", date(2026, 9, 14))
+    _snapshot(session, broker, document, date(2026, 9, 14), ["BIMAS", "VAKBN"], basis="pre_change")
+
+    assert service.check_snapshot_consistency(session, broker.id) == 0
+    session.refresh(event)
+    assert event.review_status == "auto"
+
+
+def test_consistency_check_treats_later_pre_change_snapshot_as_current(session: Session):
+    broker, document = _seed(session, "yapi-kredi-yatirim")
+    event = _event(session, broker, document, "VAKBN", "removed", date(2026, 9, 14))
+    _snapshot(session, broker, document, date(2026, 10, 1), ["BIMAS", "VAKBN"], basis="pre_change")
+
+    assert service.check_snapshot_consistency(session, broker.id) == 1
+    session.refresh(event)
+    assert event.review_status == "needs_review"
+
+
+def test_consistency_check_flags_events_contradicted_by_next_current_snapshot(session: Session):
+    broker, document = _seed(session)
+    added = _event(session, broker, document, "ASTOR", "added", date(2026, 9, 22))
+    removed = _event(session, broker, document, "TUPRS", "removed", date(2026, 9, 22))
+    weight = _event(session, broker, document, "AKSA", "weight_up", date(2026, 9, 22))
+    _snapshot(session, broker, document, date(2026, 9, 1), ["ASTOR"])  # earlier: ignored
+    _snapshot(session, broker, document, date(2026, 10, 26), ["AKSA", "TUPRS"])  # no ASTOR
+
+    assert service.check_snapshot_consistency(session, broker.id) == 2
+    for row in (added, removed, weight, document):
+        session.refresh(row)
+    assert (added.review_status, removed.review_status) == ("needs_review", "needs_review")
+    assert weight.review_status == "auto"  # weight events are never checked
+    assert document.parse_status == "needs_review"
+    assert document.parse_error == (
+        "consistency: ASTOR added 2026-09-22 but the current snapshot of 2026-10-26 "
+        "does not list it; "
+        "consistency: TUPRS removed 2026-09-22 but the current snapshot of 2026-10-26 lists it"
+    )
+    assert service.check_snapshot_consistency(session, broker.id) == 0  # already flagged
+
+
+def test_consistency_check_ignores_same_day_current_snapshot(session: Session):
+    broker, document = _seed(session)
+    event = _event(session, broker, document, "ASTOR", "added", date(2026, 9, 22))
+    _snapshot(session, broker, document, date(2026, 9, 22), ["AKSA"])  # same day: no evidence
+
+    assert service.check_snapshot_consistency(session, broker.id) == 0
+    session.refresh(event)
+    assert event.review_status == "auto"
+
+    _snapshot(session, broker, document, date(2026, 9, 23), ["AKSA"])  # strictly later: evidence
+    assert service.check_snapshot_consistency(session, broker.id) == 1
+
+
+def test_consistency_check_leaves_events_without_later_snapshot_alone(session: Session):
+    broker, document = _seed(session)
+    event = _event(session, broker, document, "ASTOR", "added", date(2026, 9, 22))
+    _snapshot(session, broker, document, date(2026, 9, 1), ["AKSA"])
+
+    assert service.check_snapshot_consistency(session, broker.id) == 0
+    session.refresh(event)
+    session.refresh(document)
+    assert event.review_status == "auto" and document.parse_error is None
+
+
+def test_run_once_flags_added_ticker_missing_from_composition(session: Session):
+    row = "<tr><td>Astor Enerji</td><td>ASTOR</td><td>1₺</td><td>%1</td><td>%1</td></tr>"
+    page = fx.GEDIK_COMPOSITION_HTML.replace(row, "")
+    assert "ASTOR" not in page
+    docs = {"gedik-yatirim": [GEDIK_PAGE, GEDIK_22_SEP]}
+    fetcher = FakeFetcher(docs, texts={**TEXTS, GEDIK_PAGE: page})
+
+    summary = service.run_once(
+        session.get_bind(), _one_broker_config("gedik-yatirim"), fetcher=fetcher
+    )
+
+    assert summary.status == "success"  # a flagged event is a review item, not an error
+    assert summary.sources[0].events_flagged == 1
+    events = {e.ticker: e for e in session.exec(select(ModelPortfolioEvent)).all()}
+    assert events["ASTOR"].review_status == "needs_review"
+    assert events["TUPRS"].review_status == "auto"
+    document = session.get(BrokerDocument, events["ASTOR"].document_id)
+    assert document.parse_status == "needs_review" and "consistency: ASTOR" in document.parse_error
+    stored = session.exec(select(BrokerWatchSourceResult)).one()
+    assert (stored.events_flagged, stored.documents_skipped_robots) == (1, 0)
+
+
+def test_yk_snapshot_as_of_falls_back_to_the_document_date(session: Session):
+    undated = _doc(CHANGE_NOTE, YK_14_SEP.file_url)  # no reportPostTime in the listing
+    texts = {**TEXTS, undated: fx.YK_14_SEP_TEXT}
+    fetcher = FakeFetcher({"yapi-kredi-yatirim": [undated]}, texts=texts)
+
+    service.run_once(session.get_bind(), _one_broker_config("yapi-kredi-yatirim"), fetcher=fetcher)
+
+    snapshot = session.exec(select(ModelPortfolioSnapshot)).one()
+    assert (snapshot.as_of, snapshot.basis) == (date(2026, 9, 14), "pre_change")
+    event = session.exec(select(ModelPortfolioEvent)).one()
+    assert (event.event_date, event.review_status) == (date(2026, 9, 14), "auto")
+
+
+def test_run_once_counts_robots_skips_in_source_result(session: Session):
+    site = FakeSites()
+    site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML)
+    site.add("https://cdn.gedik.com/robots.txt", "User-agent: *\nDisallow: /media/\n")
+
+    with site.fetcher() as fetcher:
+        summary = service.run_once(
+            session.get_bind(), _one_broker_config("gedik-yatirim"), fetcher=fetcher
+        )
+
+    result = summary.sources[0]
+    assert (result.documents_seen, result.documents_new, result.snapshots_new) == (3, 1, 1)
+    assert result.documents_skipped_robots == 2 and result.errors_count == 2
+    assert result.status == "partial"
+    assert result.error_detail == f"robots.txt disallows {fx.GEDIK_PDF_6_AUG}"
+    assert summary.status == "partial_fail"
+    stored = session.exec(select(BrokerWatchSourceResult)).one()
+    assert stored.errors_count == 2 and stored.error_detail.startswith("robots.txt disallows")
+    assert (stored.documents_skipped_robots, stored.events_flagged) == (2, 0)
+    assert fx.GEDIK_PDF_22_SEP not in site.urls() and fx.GEDIK_PDF_6_AUG not in site.urls()
+
+
+def test_run_once_counts_redirect_to_disallowed_path_as_robots_skip(session: Session):
+    site = FakeSites()
+    site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML)
+    site.add("https://cdn.gedik.com/robots.txt", "User-agent: *\nDisallow: /private/\n")
+    moved = "https://cdn.gedik.com/private/ModelPortfoyGuncellemesi_22_09_2026.pdf"
+    site.add(fx.GEDIK_PDF_22_SEP, "", status=302, headers={"Location": moved})
+    site.add(fx.GEDIK_PDF_6_AUG, fx.minimal_pdf(["Anadolu Hayat (ANHYT) cikariyoruz: Sebep."]))
+
+    with site.fetcher() as fetcher:
+        summary = service.run_once(
+            session.get_bind(), _one_broker_config("gedik-yatirim"), fetcher=fetcher
+        )
+
+    result = summary.sources[0]
+    assert (result.documents_seen, result.documents_new, result.documents_skipped_robots) == (
+        3,
+        2,
+        1,
+    )
+    assert result.status == "partial" and result.error_detail == f"robots.txt disallows {moved}"
+    assert moved not in site.urls()
+    stored = session.exec(select(BrokerWatchSourceResult)).one()
+    assert stored.documents_skipped_robots == 1
+
+
+def test_run_once_closes_the_http_fetcher_it_creates(session: Session, monkeypatch):
+    site = FakeSites()  # every URL answers 404: each source fails, the run still finishes
+    created: list[HttpFetcher] = []
+
+    def make_fetcher(user_agent: str) -> HttpFetcher:
+        created.append(HttpFetcher(user_agent, transport=httpx.MockTransport(site)))
+        return created[-1]
+
+    monkeypatch.setattr(service, "HttpFetcher", make_fetcher)
+    summary = service.run_once(session.get_bind(), load_broker_config())
+
+    assert summary.status == "failed" and summary.sources_failed == 3
+    assert len(created) == 1
+    assert all(r.headers["User-Agent"] == UA for r in site.requests)
+    with pytest.raises(RuntimeError, match="closed"):
+        created[0].discover(load_broker_config().brokers[2])
+
+
+def test_run_once_skips_when_max_runs_per_day_is_reached(session: Session):
+    engine = session.get_bind()
+    config = load_broker_config()
+    assert config.defaults.max_runs_per_day == 2
+    fetcher = FakeFetcher(_default_docs())
+
+    service.run_once(engine, config, fetcher=fetcher)
+    service.run_once(engine, config, fetcher=fetcher)
+    third = service.run_once(engine, config, fetcher=fetcher)
+
+    assert third.status == "skipped_rate_limit" and third.sources_scanned == 0
+    run = session.get(BrokerWatchRun, third.run_id)
+    assert run.status == "skipped_rate_limit" and run.finished_at is not None
+    assert _count(session, BrokerWatchRun) == 3
+    assert _count(session, BrokerWatchSourceResult) == 6  # nothing scanned by the third
+    assert fetcher.fetched.count(GEDIK_PAGE.source_url) == 2
+
+    # Skipped runs do not count towards the limit.
+    config.defaults.max_runs_per_day = 3
+    assert service.run_once(engine, config, fetcher=fetcher).status == "success"

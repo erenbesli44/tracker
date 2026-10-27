@@ -6,6 +6,7 @@ from tests.broker_watch import fixtures as fx
 ALL_TEXTS = [
     fx.ISY_20_OCT_TEXT,
     fx.ISY_1_SEP_TEXT,
+    fx.ISY_1_SEP_PDF_SENTENCE,
     fx.GEDIK_22_SEP_TEXT,
     fx.GEDIK_6_AUG_TEXT,
     fx.YK_14_SEP_PAGE1,
@@ -228,3 +229,98 @@ def test_is_known_ticker_uses_config_list():
     assert parsers.is_known_ticker("AKBNK")
     assert parsers.is_known_ticker("akbnk")
     assert not parsers.is_known_ticker("TCMB")
+
+
+# ── Step 2 residuals ──────────────────────────────────────────────────────────
+
+
+def test_isy_weight_sentence_survives_pypdf_split_words():
+    # Real pypdf output of the 1 Sep PDF: 'i ndirim' (a noun) and 'ağ ırlığını' are split,
+    # the verb stems are intact. The feed excerpt (ISY_1_SEP_TEXT) has no splits.
+    text = fx.ISY_1_SEP_PDF_SENTENCE
+    doc = parsers.parse_isy_rss(text, published_at=fx.ISY_1_SEP_DATE)
+
+    assert [(e.ticker, e.action) for e in doc.events] == [
+        ("TUPRS", "weight_down"),
+        ("AKBNK", "weight_up"),
+        ("GARAN", "weight_up"),
+        ("ENJSA", "weight_up"),
+    ]
+    assert not doc.needs_review
+    assert any("TCMB" in w for w in doc.warnings)
+    _assert_quotes_ok(doc, text)
+
+
+def test_isy_weight_verb_stems_stay_strict():
+    # Verb stems are not loosened on purpose: with optional gaps 'az altın' would match
+    # 'azalt' and 'in dirençli' would match 'indir', inventing a direction across words.
+    # A clause without a contiguous stem yields no weight event.
+    for clause in (
+        "Tüpraş’ın ağırlığını daha az altın fiyatına bağlı kalacak şekilde koruyoruz.",
+        "AKBNK ağırlığını korurken in dirençli bankacılık sektörüne odaklanıyoruz.",
+    ):
+        doc = parsers.parse_isy_rss(f"Model Portföy Değişiklikler {clause} 20.10.2026")
+        assert doc.events == [], clause
+
+
+def test_isy_and_gedik_headers_tolerate_split_words():
+    # Synthetic splits: the real 20 Oct and 22 Sep PDFs keep these headings intact
+    # (checked 2026-10-26); this guards the _loose() patterns themselves.
+    text = fx.ISY_20_OCT_TEXT.replace("Eklenen Şirket", "Ekle nen Şirket").replace(
+        "Model Portföy Değişiklikler", "Model Portf öy Değişiklikler"
+    )
+    doc = parsers.parse_isy_rss(text, published_at=fx.ISY_20_OCT_DATE)
+    assert [(e.ticker, e.action) for e in doc.events] == [("SAHOL", "added"), ("AKBNK", "removed")]
+    assert doc.events[0].reason_quote.endswith("devam ediyoruz.")  # body cut before the label
+
+    gedik = fx.GEDIK_22_SEP_TEXT.replace("(TUPRS) çıkarıyoruz:", "(TUPRS) çıkarı yoruz:")
+    doc = parsers.parse_gedik_page(gedik)
+    assert [(e.ticker, e.action) for e in doc.events] == [("TUPRS", "removed"), ("ASTOR", "added")]
+
+
+def test_yk_holdings_come_from_page_2_and_known_tickers_only():
+    page1 = "BIST 14.09.2026 raporu. 2026 16.01.2023"
+    assert parsers.parse_yk_json(page1, published_at=date(2026, 9, 14)).composition == []
+
+    page2 = "Şirket Kod Portföy Giriş Tarihi BIST 14.09.2026 Bim BIMAS 16.01.2023"
+    doc = parsers.parse_yk_json(page1 + "\f" + page2, published_at=date(2026, 9, 14))
+    assert [(h.ticker, h.entry_date) for h in doc.composition] == [("BIMAS", date(2023, 1, 16))]
+    assert any("unknown holding BIST" in w for w in doc.warnings)
+
+
+def test_yk_composition_basis_follows_the_table_title():
+    doc = parsers.parse_yk_json(fx.YK_14_SEP_TEXT, published_at=fx.YK_14_SEP_DATE)
+    assert doc.composition_basis == "pre_change"
+
+    current = fx.YK_14_SEP_TEXT.replace(" (değişiklikler öncesi)", "")
+    doc = parsers.parse_yk_json(current, published_at=fx.YK_14_SEP_DATE)
+    assert doc.composition_basis == "current" and len(doc.composition) == 3
+    assert any("without the '(değişiklikler öncesi)' title" in w for w in doc.warnings)
+    assert parsers.parse_gedik_page(fx.GEDIK_22_SEP_TEXT).composition_basis == "current"
+
+
+def test_yk_document_date_is_the_first_turkish_date_on_page_1():
+    assert parsers.parse_yk_json(fx.YK_14_SEP_TEXT).document_date == date(2026, 9, 14)
+    doc = parsers.parse_yk_json(fx.YK_14_SEP_TEXT, published_at=date(2026, 9, 15))
+    assert (doc.document_date, doc.events[0].event_date) == (date(2026, 9, 14), date(2026, 9, 15))
+    assert parsers.parse_gedik_page(fx.GEDIK_22_SEP_TEXT).document_date is None
+
+
+def test_isy_weight_clause_naming_more_companies_than_tickers_is_flagged():
+    text = (
+        "Model Portföy Değişiklikler Garanti Bankası’nın ve Emlak GYO’nun ağırlığını "
+        "artırırken AKBNK ağırlığını azaltıyoruz. 20.10.2026"
+    )
+    doc = parsers.parse_isy_rss(text)
+    assert [(e.ticker, e.action) for e in doc.events] == [("AKBNK", "weight_down")]
+    assert doc.needs_review
+
+    # One company mapped (Tüpraş) but two named in the clause: flagged, event kept.
+    text = "Model Portföy Değişiklikler Tüpraş’ın ve Garanti’nin ağırlığını azaltıyoruz. 20.10.2026"
+    doc = parsers.parse_isy_rss(text)
+    assert [(e.ticker, e.action) for e in doc.events] == [("TUPRS", "weight_down")]
+    assert doc.needs_review and any("unmapped company" in w for w in doc.warnings)
+
+    # As many genitives as tickers: not flagged (the 1 Sep note has TCMB’nin + 3 tickers).
+    doc = parsers.parse_isy_rss(fx.ISY_1_SEP_TEXT, published_at=fx.ISY_1_SEP_DATE)
+    assert not doc.needs_review

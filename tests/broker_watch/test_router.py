@@ -4,7 +4,8 @@ from sqlmodel import Session
 from src.jobs.broker_watch import service
 from src.jobs.broker_watch.config import load_broker_config
 from src.main import app
-from tests.broker_watch.test_service import FakeFetcher, _default_docs
+from tests.broker_watch import fixtures as fx
+from tests.broker_watch.test_service import GEDIK_PAGE, TEXTS, FakeFetcher, _default_docs
 
 ALL_SLUGS = ["is-yatirim", "yapi-kredi-yatirim", "gedik-yatirim"]
 
@@ -66,3 +67,46 @@ async def test_routes_require_api_key(client: AsyncClient):
         for path in ("health", "runs", "runs/1"):
             response = await anon.get(f"/jobs/broker-watch/{path}")
             assert response.status_code == 401, path
+
+
+async def test_health_verdict_is_partial_after_a_partial_run(client: AsyncClient, session: Session):
+    engine = session.get_bind()
+    config = load_broker_config()
+    service.run_once(engine, config, fetcher=FakeFetcher(_default_docs()))  # all sources succeed
+    no_table = {**TEXTS, GEDIK_PAGE: "<html><body><p>Model Portföy</p></body></html>"}
+    service.run_once(engine, config, fetcher=FakeFetcher(_default_docs(), texts=no_table))
+
+    body = (await client.get("/jobs/broker-watch/health")).json()
+
+    assert body["verdict"] == "partial"
+    assert body["stale_sources"] == []
+    assert body["last_24h"]["runs_partial"] == 1
+    assert body["latest_run"]["status"] == "partial_fail"
+
+
+async def test_health_reports_per_source_counters_and_skipped_runs(
+    client: AsyncClient, session: Session
+):
+    engine = session.get_bind()
+    config = load_broker_config()
+    row = "<tr><td>Astor Enerji</td><td>ASTOR</td><td>1₺</td><td>%1</td><td>%1</td></tr>"
+    no_astor = {**TEXTS, GEDIK_PAGE: fx.GEDIK_COMPOSITION_HTML.replace(row, "")}
+    first = service.run_once(engine, config, fetcher=FakeFetcher(_default_docs(), texts=no_astor))
+
+    body = (await client.get("/jobs/broker-watch/health")).json()
+    sources = {s["slug"]: s for s in body["sources"]}
+    assert body["verdict"] == "healthy"  # a flagged event is a review item, not an error
+    assert sources["gedik-yatirim"]["events_flagged"] == 1
+    assert all(s["documents_skipped_robots"] == 0 for s in body["sources"])
+    detail = (await client.get(f"/jobs/broker-watch/runs/{first.run_id}")).json()
+    assert [s["events_flagged"] for s in detail["sources"]] == [0, 0, 1]
+
+    service.run_once(engine, config, fetcher=FakeFetcher(_default_docs()))
+    skipped = service.run_once(engine, config, fetcher=FakeFetcher(_default_docs()))  # 3rd of 2
+    assert skipped.status == "skipped_rate_limit"
+    body = (await client.get("/jobs/broker-watch/health")).json()
+    assert body["latest_run"]["status"] == "skipped_rate_limit"
+    assert (body["last_24h"]["runs_total"], body["last_24h"]["runs_skipped"]) == (3, 1)
+    assert body["last_24h"]["runs_failed"] == 0 and body["verdict"] == "healthy"
+    sources = {s["slug"]: s for s in body["sources"]}
+    assert sources["gedik-yatirim"]["events_flagged"] == 0  # counters of the last real scan

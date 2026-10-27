@@ -1,36 +1,47 @@
 """Live source adapters: discover and fetch documents for the three brokers.
 
 Network only; parsing lives in ``parsers.py``. ``HttpFetcher`` is the production
-``SourceFetcher``; tests inject a fake with the same two methods and never touch
-the network. Parsers expect PDF pages joined with form feeds (``\\f``).
+``SourceFetcher``; tests drive it through ``httpx.MockTransport`` or inject a fake
+with the same two methods, and never touch the network. Parsers expect PDF pages
+joined with form feeds (``\\f``), which ``pdf_to_text`` produces.
 
-Deferred to OI-027 step 2: a real ``pdf_to_text`` (no PDF library in uv.lock),
-robots.txt honouring (plan criterion F) and the snapshot-consistency check for
-added/removed events (plan criterion D).
+robots.txt is fetched once per host and run and applied to every outgoing request
+(redirect hops and POSTs included) for the configured User-Agent, with ``*``/``$``
+wildcards (plan criterion F). A missing robots.txt (4xx) allows; an unreachable one
+or a 5xx disallows the host for this run (RFC 9309 §2.3.1.4).
 """
 
 import hashlib
 import html
+import io
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
+from urllib.parse import urlencode, urlsplit
 from xml.etree import ElementTree
 
 import httpx
+from pypdf import PdfReader
 
 from src.jobs.broker_watch.config import WatchedBroker
-from src.jobs.broker_watch.parsers import gedik_composition_table
+from src.jobs.broker_watch.parsers import PAGE_BREAK, gedik_composition_table
+from src.jobs.broker_watch.robots import RobotsRules
+
+logger = logging.getLogger(__name__)
 
 CHANGE_NOTE = "change_note"
 COMPOSITION = "composition"
+MAX_PDF_BYTES = 25 * 1024 * 1024  # change notes are well under 1 MB; larger files are refused
 
 YK_RESEARCH_PAGE = "https://www.ykyatirim.com.tr/hizmetler/arastirma"
 _RSS_CONTENT_NS = "{http://purl.org/rss/1.0/modules/content/}"
 _PDF_URL = re.compile(r"https?://[^\s\"'<>]+?\.pdf\b", re.IGNORECASE)
 # Date in PDF file names: 20_10_2026.pdf (İş), ModelPortfoyGuncellemesi_06_08_2026_x.pdf,
-# modelportfoyguncellemesi_22092026.pdf (Gedik).
-_FILENAME_DATE = re.compile(r"(\d{2})_?(\d{2})_?(\d{4})")
+# modelportfoyguncellemesi_22092026.pdf (Gedik). Anchored on both sides so that hashes
+# (_12345678.pdf) and ISO dates are not read as dd mm yyyy; years outside 2000-2100 fail.
+_FILENAME_DATE = re.compile(r"(?<!\d)(\d{2})_?(\d{2})_?(20\d{2}|2100)(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -53,15 +64,24 @@ class SourceFetcher(Protocol):
     def fetch(self, broker: WatchedBroker, doc: DiscoveredDocument) -> FetchedDocument: ...
 
 
-def pdf_to_text(data: bytes) -> str:
-    """Extract text from PDF bytes, pages separated by form feeds.
+class RobotsDisallowed(Exception):
+    """The host's robots.txt forbids this URL for our User-Agent."""
 
-    Stub: no PDF library is in uv.lock yet (OI-027 step 1 open question). The
-    choice of library is the owner's; the fake fetcher in tests bypasses this.
+
+def pdf_to_text(data: bytes) -> str:
+    """Text of a PDF with pages joined by form feeds; '' when nothing is extractable.
+
+    Data that is not a PDF raises pypdf's error, which the service records as a
+    fetch failure for that document.
     """
-    raise NotImplementedError(
-        "pdf_to_text needs a PDF text library (pymupdf is not in uv.lock); see OI-027"
-    )
+    reader = PdfReader(io.BytesIO(data))
+    pages = [
+        (page.extract_text() or "").replace("\r\n", "\n").replace("\r", "\n")
+        for page in reader.pages
+    ]
+    if not any(page.strip() for page in pages):
+        return ""
+    return PAGE_BREAK.join(pages)
 
 
 def sha256_hex(data: bytes) -> str:
@@ -78,16 +98,42 @@ def date_from_filename(url: str) -> date | None:
         return None
 
 
+def _with_query(base: str, **params: object) -> str:
+    """``base`` with ``params`` URL-encoded into its query string."""
+    return f"{base}{'&' if urlsplit(base).query else '?'}{urlencode(params)}"
+
+
 class HttpFetcher:
-    """httpx-based discovery and download with the configured User-Agent."""
+    """httpx-based discovery and download with the configured User-Agent.
+
+    Use as a context manager (or call ``close()``) so the HTTP client is released.
+    """
 
     def __init__(
-        self, user_agent: str, timeout: float = 30.0, client: httpx.Client | None = None
+        self,
+        user_agent: str,
+        timeout: float = 30.0,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self._client = client or httpx.Client(
-            headers={"User-Agent": user_agent}, timeout=timeout, follow_redirects=True
+        self._user_agent = user_agent
+        self._client = httpx.Client(
+            headers={"User-Agent": user_agent},
+            timeout=timeout,
+            follow_redirects=True,
+            transport=transport,
+            event_hooks={"request": [self._robots_hook]},
         )
         self._pages: dict[str, str] = {}  # HTML fetched during discovery, reused by fetch()
+        self._robots: dict[str, RobotsRules | None] = {}  # host -> rules (None: allow all)
+
+    def __enter__(self) -> "HttpFetcher":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._client.close()
 
     # ── SourceFetcher ─────────────────────────────────────────────────────────
 
@@ -110,36 +156,108 @@ class HttpFetcher:
         # Yapı Kredi's file endpoint requires the research-page cookies (set in discover)
         # and that page as Referer.
         headers = {"Referer": YK_RESEARCH_PAGE} if broker.adapter == "yk_json" else {}
-        data = self._get(doc.file_url, headers=headers).content
+        data = self._download(doc.file_url, headers)
         return FetchedDocument(sha256=sha256_hex(data), text=pdf_to_text(data))
 
-    # ── Per-source discovery ──────────────────────────────────────────────────
+    # ── HTTP + robots.txt ─────────────────────────────────────────────────────
 
     def _get(self, url: str, **kwargs) -> httpx.Response:
         response = self._client.get(url, **kwargs)
         response.raise_for_status()
         return response
 
-    def _discover_isy(self, broker: WatchedBroker) -> list[DiscoveredDocument]:
-        """RSS items -> PDF links in their bodies. The PDF is the record: posts share a
-        'latest change' body, so documents are deduplicated by PDF URL (and later sha256)."""
-        root = ElementTree.fromstring(self._get(broker.url).content)
-        docs: dict[str, DiscoveredDocument] = {}
-        for item in root.iter("item"):
-            link = item.findtext("link") or broker.url
-            body = " ".join(
-                item.findtext(tag) or "" for tag in ("description", f"{_RSS_CONTENT_NS}encoded")
+    def _download(self, url: str, headers: dict[str, str]) -> bytes:
+        """GET a file, refusing bodies above MAX_PDF_BYTES: by the declared length before
+        reading, and while streaming (a chunked response is never buffered beyond the cap)."""
+        with self._client.stream("GET", url, headers=headers) as response:
+            response.raise_for_status()
+            declared = int(response.headers.get("Content-Length") or 0)
+            if declared > MAX_PDF_BYTES:
+                raise ValueError(f"file too large ({declared} bytes > {MAX_PDF_BYTES}): {url}")
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in response.iter_bytes():
+                size += len(chunk)
+                if size > MAX_PDF_BYTES:
+                    raise ValueError(f"file too large (> {MAX_PDF_BYTES} bytes): {url}")
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+    def _robots_hook(self, request: httpx.Request) -> None:
+        """httpx request hook: every outgoing request (redirect hops and POSTs included)
+        must be allowed by the host's robots.txt; robots.txt itself is exempt."""
+        if not request.url.path.endswith("/robots.txt"):
+            self._check_robots(str(request.url))
+
+    def _check_robots(self, url: str) -> None:
+        parts = urlsplit(url)
+        if parts.netloc not in self._robots:
+            self._robots[parts.netloc] = None  # requests made while loading are not re-checked
+            self._robots[parts.netloc] = self._load_robots(
+                f"{parts.scheme}://{parts.netloc}/robots.txt"
             )
-            for pdf_url in _PDF_URL.findall(html.unescape(body)):
-                docs.setdefault(
-                    pdf_url,
-                    DiscoveredDocument(
-                        kind=CHANGE_NOTE,
-                        source_url=link,
-                        file_url=pdf_url,
-                        published_at=date_from_filename(pdf_url),
-                    ),
+        rules = self._robots[parts.netloc]
+        if rules is not None and not rules.can_fetch(url):
+            raise RobotsDisallowed(url)
+
+    def _load_robots(self, robots_url: str) -> RobotsRules | None:
+        """Rules of one host: missing (4xx) -> None (allow all); unreachable or 5xx ->
+        disallow all for this run (RFC 9309 §2.3.1.4)."""
+        try:
+            response = self._client.get(robots_url)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "robots.txt unreachable, disallowing the host this run: %s (%s)", robots_url, exc
+            )
+            return RobotsRules.disallow_all()
+        if response.status_code >= 500:
+            logger.warning(
+                "robots.txt returned %d, disallowing the host this run: %s",
+                response.status_code,
+                robots_url,
+            )
+            return RobotsRules.disallow_all()
+        if response.status_code >= 400:
+            return None  # no robots.txt
+        return RobotsRules(response.text, self._user_agent)
+
+    # ── Per-source discovery ──────────────────────────────────────────────────
+
+    def _discover_isy(self, broker: WatchedBroker) -> list[DiscoveredDocument]:
+        """RSS items -> PDF links in their bodies, following ``?paged=N`` up to
+        ``broker.max_pages``. The PDF is the record: posts share a 'latest change' body,
+        so documents are deduplicated by PDF URL (and later sha256)."""
+        docs: dict[str, DiscoveredDocument] = {}
+        for page in range(1, broker.max_pages + 1):
+            url = broker.url if page == 1 else _with_query(broker.url, paged=page)
+            try:
+                root = ElementTree.fromstring(self._get(url).content)
+            except (httpx.HTTPError, ElementTree.ParseError, RobotsDisallowed) as exc:
+                if page == 1:
+                    raise
+                logger.warning("İş feed page %d skipped (%s: %s)", page, type(exc).__name__, exc)
+                break  # keep the documents found so far
+            items = list(root.iter("item"))
+            if not items:
+                break
+            for item in items:
+                link = item.findtext("link") or url
+                body = " ".join(
+                    item.findtext(tag) or "" for tag in ("description", f"{_RSS_CONTENT_NS}encoded")
                 )
+                pdf_urls = _PDF_URL.findall(html.unescape(body))
+                if not pdf_urls:
+                    logger.warning("İş post without a PDF link skipped: %s", link)
+                for pdf_url in pdf_urls:
+                    docs.setdefault(
+                        pdf_url,
+                        DiscoveredDocument(
+                            kind=CHANGE_NOTE,
+                            source_url=link,
+                            file_url=pdf_url,
+                            published_at=date_from_filename(pdf_url),
+                        ),
+                    )
         return list(docs.values())
 
     def _discover_yk(self, broker: WatchedBroker) -> list[DiscoveredDocument]:
@@ -164,7 +282,9 @@ class HttpFetcher:
                 DiscoveredDocument(
                     kind=CHANGE_NOTE,
                     source_url=YK_RESEARCH_PAGE,
-                    file_url=f"{broker.site_url}/DetailPage/GetFilePath?url={item['filePath']}",
+                    file_url=_with_query(
+                        f"{broker.site_url}/DetailPage/GetFilePath", url=item["filePath"]
+                    ),
                     published_at=date.fromisoformat(posted[:10]) if posted else None,
                 )
             )

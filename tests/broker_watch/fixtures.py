@@ -27,6 +27,15 @@ ISY_1_SEP_TEXT = (
     "artırıyoruz."
 )
 ISY_1_SEP_DATE = date(2026, 9, 1)
+# The same sentence as pypdf (plain mode) extracts it from the PDF itself, page 1,
+# https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/09/01_09_2026.pdf (read 2026-10-26):
+# words are split at glyph-positioning points ('h edef', 'i ndirim', 'ağ ırlığını').
+ISY_1_SEP_PDF_SENTENCE = (
+    "Güçlü rafineri marjlarının etkisiyle 372 TL'lik 12 aylık h edef fiyatımızı %8 aşan "
+    "Tüpraş'ın portföydeki ağırlığını %7'ye indirirken, TCMB'nin olası faiz i ndirim "
+    "sürecinin başlıca kazananları olacak faize duyarlı hisselerin AKBNK, GARAN ve ENJSA "
+    "ağ ırlığını artırıyoruz."
+)
 
 # Gedik Yatırım, "Model Portföy Güncellemesi", 22 Sep 2026, PDF page 1 (reasons trimmed),
 # https://cdn.gedik.com/media/media/brnjmjkx/modelportfoyguncellemesi_22092026.pdf
@@ -94,3 +103,116 @@ GEDIK_UNKNOWN_TICKER_TEXT = (
     "Örnek’i ekliyoruz 1 Ekim 2026 Model Portföy Güncellemesi "
     "Örnek Şirket’i (ORNEK) ekliyoruz: Örnek Şirket’i model portföyümüze ekliyoruz."
 )
+
+
+# ── Synthetic HTTP fixtures for the adapter tests (httpx.MockTransport) ───────
+# Shapes follow the real sources; the contents are invented and tiny.
+
+ISY_FEED_URL = "https://arastirma.isyatirim.com.tr/category/son-haberler/toppick_deg/feed/"
+ISY_PDF_20_OCT = "https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/10/20_10_2026.pdf"
+ISY_PDF_1_SEP = "https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/09/01_09_2026.pdf"
+ISY_PDF_5_FEB = "https://arastirma.isyatirim.com.tr/wp-content/uploads/2026/02/05_02_2026.pdf"
+
+
+def _rss(items: list[tuple[str, str | None]]) -> str:
+    """WordPress-style RSS; each item is (post link, PDF URL or None)."""
+    body = ""
+    for link, pdf in items:
+        inner = f'<p>Son değişiklik</p><a href="{pdf}">PDF</a>' if pdf else "<p>Duyuru</p>"
+        body += (
+            f"<item><title>Model Portföy Değişiklikleri</title><link>{link}</link>"
+            f"<description>Özet</description><content:encoded><![CDATA[{inner}]]>"
+            "</content:encoded></item>"
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
+        f"<channel><title>İş Yatırım</title>{body}</channel></rss>"
+    )
+
+
+ISY_FEED_PAGE_1 = _rss(
+    [
+        ("https://arastirma.isyatirim.com.tr/2026/10/20/degisiklik-47/", ISY_PDF_20_OCT),
+        ("https://arastirma.isyatirim.com.tr/2026/10/20/degisiklik-46/", ISY_PDF_20_OCT),
+        ("https://arastirma.isyatirim.com.tr/2026/09/01/degisiklik-45/", ISY_PDF_1_SEP),
+        ("https://arastirma.isyatirim.com.tr/2026/08/15/duyuru/", None),
+    ]
+)
+ISY_FEED_PAGE_2 = _rss(
+    [("https://arastirma.isyatirim.com.tr/2026/02/05/degisiklik-40/", ISY_PDF_5_FEB)]
+)
+
+YK_RESEARCH_PAGE = "https://www.ykyatirim.com.tr/hizmetler/arastirma"
+YK_REPORTS_URL = "https://www.ykyatirim.com.tr/DetailPage/GetResearchReports"
+YK_FILE_PATH = "/Files/Research/2026-09-14 Model Portföy.pdf"
+YK_REPORTS_JSON = [
+    {
+        "isPublic": True,
+        "reportTypeName": "Model Portföy",
+        "filePath": YK_FILE_PATH,
+        "reportPostTime": "2026-09-14T09:12:00",
+    },
+    {
+        "isPublic": False,
+        "reportTypeName": "Model Portföy",
+        "filePath": "/Files/Research/private.pdf",
+        "reportPostTime": "2026-10-01T09:00:00",
+    },
+    {
+        "isPublic": True,
+        "reportTypeName": "Strateji Notu",
+        "filePath": "/Files/Research/strateji.pdf",
+        "reportPostTime": "2026-10-13T09:00:00",
+    },
+]
+
+GEDIK_PAGE_URL = "https://gedik.com/analiz/model-portfoy/hisse-model-portfoy"
+GEDIK_PDF_22_SEP = (
+    "https://cdn.gedik.com/media/media/brnjmjkx/ModelPortfoyGuncellemesi_22_09_2026_abcd1234.pdf"
+)
+GEDIK_PDF_6_AUG = "https://cdn.gedik.com/media/media/q1yd2kau/modelportfoyguncellemesi_06082026.pdf"
+GEDIK_PDF_MONTHLY = "https://cdn.gedik.com/media/media/zz9/ModelPortfoyStratejiRaporu_Ekim2026.pdf"
+GEDIK_PDF_WEEKLY = "https://cdn.gedik.com/media/media/zz8/Haftalik_19102026.pdf"
+GEDIK_PAGE_HTML = GEDIK_COMPOSITION_HTML.replace(
+    "<p>*Rapor</p>",
+    "<p>*Rapor</p><ul class='marketReleases'>"
+    + "".join(
+        f'<li><a href="{url}">{url.rsplit("/", 1)[-1]}</a></li>'
+        for url in (GEDIK_PDF_22_SEP, GEDIK_PDF_6_AUG, GEDIK_PDF_MONTHLY, GEDIK_PDF_WEEKLY)
+    )
+    + "</ul>",
+)
+
+
+def minimal_pdf(pages: list[str]) -> bytes:
+    """A valid one-font PDF with one line of ASCII text per page, for pypdf tests."""
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"",  # pages dictionary, filled below
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for line in pages:
+        escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        content = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
+        objects.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+            b"/Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>" % (len(objects) + 2)
+        )
+        objects.append(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content))
+    kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(len(pages)))
+    objects[1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode()
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref_at = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref_at,
+    )
+    return bytes(out)
