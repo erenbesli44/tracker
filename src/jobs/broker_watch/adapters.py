@@ -11,9 +11,12 @@ wildcards (plan criterion F). A missing robots.txt (4xx) allows; an unreachable 
 or a 5xx disallows the host for this run (RFC 9309 §2.3.1.4).
 
 Backfill mode (``since``): discovery follows the İş feed pages until a page holds
-only items published before ``since`` (hard cap ``BACKFILL_MAX_PAGES``) and drops
-documents dated before ``since`` on every source; ``request_delay`` seconds are
-slept between live requests as a courtesy.
+only items whose RSS post date (``pubDate``) predates ``since`` (hard cap
+``BACKFILL_MAX_PAGES``; older items are skipped, while a stored İş document keeps the
+PDF filename date as ``published_at`` -- the two can differ), and drops Yapı Kredi
+reports by ``reportPostTime`` and Gedik PDFs by filename date when older than
+``since``. ``request_delay`` seconds are slept before every request after the first,
+robots.txt fetches and redirect hops included, as a courtesy.
 """
 
 import hashlib
@@ -214,7 +217,8 @@ class HttpFetcher:
     def _request_hook(self, request: httpx.Request) -> None:
         """httpx request hook: every outgoing request (redirect hops and POSTs included)
         must be allowed by the host's robots.txt (robots.txt itself is exempt); then the
-        courtesy delay, if any, is slept and the request counted."""
+        courtesy delay, if any, is slept -- before robots.txt fetches and redirect hops
+        too -- and the request counted."""
         if not request.url.path.endswith("/robots.txt"):
             self._check_robots(str(request.url))
         if self._request_delay and self.requests_sent:
@@ -262,7 +266,8 @@ class HttpFetcher:
     def _discover_isy(self, broker: WatchedBroker) -> list[DiscoveredDocument]:
         """RSS items -> PDF links in their bodies, following ``?paged=N`` up to
         ``broker.max_pages`` (backfill: up to BACKFILL_MAX_PAGES, until a page's items
-        all predate ``since``; older items are skipped). The PDF is the record: posts
+        all predate ``since`` by RSS pubDate; older items are skipped, the document's
+        ``published_at`` stays the PDF filename date). The PDF is the record: posts
         share a 'latest change' body, so documents are deduplicated by PDF URL (and
         later sha256)."""
         docs: dict[str, DiscoveredDocument] = {}

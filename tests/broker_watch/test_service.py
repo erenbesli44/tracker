@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from src.jobs.broker_watch import service
+from src.jobs.broker_watch import adapters, service
 from src.jobs.broker_watch.adapters import (
     CHANGE_NOTE,
     COMPOSITION,
@@ -511,31 +511,46 @@ def test_backfill_bypasses_max_runs_per_day_and_marks_the_run(session: Session):
 
 def test_backfill_document_cap_fails_the_source_without_fetching(session: Session):
     engine = session.get_bind()
+    config = load_broker_config()
     fetcher = FakeFetcher(_default_docs())  # İş 2, Yapı Kredi 1, Gedik 2 documents
 
     summary = service.run_once(
-        engine, load_broker_config(), fetcher=fetcher, since=date(2026, 1, 1), max_documents=4
+        engine, config, fetcher=fetcher, since=date(2026, 1, 1), max_documents=1
     )
 
     results = {r.broker_slug: r for r in summary.sources}
-    assert results["is-yatirim"].status == "success"
-    assert results["yapi-kredi-yatirim"].status == "success"
-    gedik = results["gedik-yatirim"]  # 2 documents left, 1 of the cap remaining
-    assert gedik.status == "failed" and gedik.documents_new == 0 and gedik.documents_seen == 2
-    assert gedik.error_detail == (
-        "discover: 2 documents exceed the remaining cap of 1; nothing fetched"
+    isy = results["is-yatirim"]  # 2 documents against a cap of 1: nothing fetched, nothing charged
+    assert isy.status == "failed" and (isy.documents_seen, isy.documents_new) == (0, 0)
+    assert (
+        isy.error_detail == "discover: 2 documents exceed the remaining cap of 1; nothing fetched"
     )
-    assert fetcher.fetched == [ISY_20_OCT.file_url, ISY_1_SEP.file_url, YK_14_SEP.file_url]
-    assert summary.status == "partial_fail" and summary.sources_failed == 1
+    yk = results["yapi-kredi-yatirim"]  # the budget is untouched: the later source still runs
+    assert yk.status == "success" and (yk.documents_seen, yk.documents_new) == (1, 1)
+    gedik = results["gedik-yatirim"]  # Yapı Kredi used the last document of the budget
+    assert gedik.status == "failed"
+    assert (
+        gedik.error_detail == "discover: 2 documents exceed the remaining cap of 0; nothing fetched"
+    )
+    assert fetcher.fetched == [YK_14_SEP.file_url]
+    assert summary.status == "partial_fail" and summary.sources_failed == 2
     stored = {r.broker_slug: r for r in session.exec(select(BrokerWatchSourceResult)).all()}
-    assert (stored["gedik-yatirim"].status, stored["gedik-yatirim"].documents_seen) == ("failed", 2)
-    assert _count(session, BrokerDocument) == 3
+    assert (stored["is-yatirim"].status, stored["is-yatirim"].documents_seen) == ("failed", 0)
+    assert _count(session, BrokerDocument) == 1
 
     # Without a cap nothing is held back.
-    summary = service.run_once(
-        engine, load_broker_config(), fetcher=fetcher, since=date(2026, 1, 1)
-    )
+    summary = service.run_once(engine, config, fetcher=fetcher, since=date(2026, 1, 1))
     assert summary.status == "success" and _count(session, BrokerDocument) == 5
+
+    # Already-stored documents are iterated (not fetched) and still count: İş 2 + Yapı
+    # Kredi 1 use up a cap of 3, so Gedik's 2 fail again although nothing was downloaded.
+    fetched_before = list(fetcher.fetched)
+    summary = service.run_once(
+        engine, config, fetcher=fetcher, since=date(2026, 1, 1), max_documents=3
+    )
+    results = {r.broker_slug: r for r in summary.sources}
+    assert (results["is-yatirim"].status, results["is-yatirim"].documents_seen) == ("success", 2)
+    assert results["gedik-yatirim"].status == "failed"
+    assert fetcher.fetched == fetched_before
 
 
 def test_backfill_builds_the_http_fetcher_with_since_and_delay(session: Session, monkeypatch):
@@ -547,7 +562,10 @@ def test_backfill_builds_the_http_fetcher_with_since_and_delay(session: Session,
         return HttpFetcher(user_agent, transport=httpx.MockTransport(site), **kwargs)
 
     monkeypatch.setattr(service, "HttpFetcher", make_fetcher)
-    monkeypatch.setattr(service, "BACKFILL_REQUEST_DELAY", 0.25)  # not slept: every URL is 404
+    monkeypatch.setattr(service, "BACKFILL_REQUEST_DELAY", 0.25)
+    # The hook sleeps before every request after the first whatever the response (the
+    # 404s here included), so the delay is stubbed out to keep the test instant.
+    monkeypatch.setattr(adapters.time, "sleep", lambda _seconds: None)
     config = load_broker_config()
 
     service.run_once(session.get_bind(), config, since=date(2026, 1, 1))

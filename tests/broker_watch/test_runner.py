@@ -23,7 +23,16 @@ def test_backfill_requires_since_and_reads_delay_and_cap():
     assert (args.delay, args.max_documents) == (0.5, 5)
 
 
-@pytest.mark.parametrize("argv", [["--backfill"], ["--since", "2026-01-01"], ["--since", "x"]])
-def test_backfill_and_since_go_together(argv):
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--backfill"],
+        ["--since", "2026-01-01"],
+        ["--since", "x"],
+        ["--delay", "2"],  # backfill-only options without --backfill
+        ["--max-documents", "5"],
+    ],
+)
+def test_backfill_options_are_rejected_without_backfill(argv):
     with pytest.raises(SystemExit):
         runner._parse_args(argv)

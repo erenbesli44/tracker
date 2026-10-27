@@ -357,6 +357,24 @@ def test_isy_split_verb_merges_into_next_clause_and_is_flagged():
     assert not doc.needs_review
 
 
+def test_isy_unlisted_noun_form_in_merged_clause_is_flagged():
+    # Shape of the 5 Feb 2026 note ("Aksa Enerji ve Medical Park ağırlıklarımızı %2 şer
+    # arttırırken, … THY nin de ağırlığını %2 arttırıyoruz"), here with tickers: the first
+    # noun form is not a strict clause noun, so the clause merges into the next one. The
+    # guard counts nouns by stem and must flag every event rather than let AKSEN and MPARK
+    # inherit "indir".
+    text = (
+        "Model Portföy Değişiklikler AKSEN ve MPARK ağırlıklarımızı %2 şer arttırırken, "
+        "THYAO'nun ağırlığını %2 indiriyoruz. 05.02.2026"
+    )
+    doc = parsers.parse_isy_rss(text)
+
+    assert {e.ticker for e in doc.events} <= {"AKSEN", "MPARK", "THYAO"} and doc.events
+    assert all(e.needs_review for e in doc.events)
+    assert doc.needs_review
+    assert any("weight clause without a recognised verb" in w for w in doc.warnings)
+
+
 def test_isy_unlisted_verb_clause_is_flagged_not_merged_silently():
     text = (
         "Model Portföy Değişiklikler TUPRS ağırlığını sabit tutarken, AKBNK ağırlığını "

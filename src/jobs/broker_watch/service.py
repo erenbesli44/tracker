@@ -8,8 +8,10 @@ already stored), events once per (broker, ticker, action, event_date). At most
 A backfill (``since``) is a one-off run that bypasses that limit, lets the fetcher
 follow the sources back to ``since`` with a courtesy delay, and is marked
 "backfill since <date>" as the first entry of the run's ``error_details`` (the only
-free-text field on the run row). ``max_documents`` is its safety cap: a source whose
-discovery would push the run past it is recorded as failed and nothing of it is fetched.
+free-text field on the run row). ``max_documents`` is its safety cap, cumulative across
+sources and charged with the documents a source iterates (already-stored ones included):
+a source whose discovery would exceed what is left is recorded as failed, nothing of it
+is fetched and nothing is charged, so the later sources still run on the same budget.
 """
 
 import json
@@ -238,9 +240,8 @@ def _process_source(
                 len(docs),
                 max_documents,
             )
-            result.status = "failed"
+            result.status = "failed"  # documents_seen stays 0: nothing iterated, nothing charged
             result.errors_count = 1
-            result.documents_seen = len(docs)
             result.error_detail = (
                 f"discover: {len(docs)} documents exceed the remaining cap of "
                 f"{max_documents}; nothing fetched"

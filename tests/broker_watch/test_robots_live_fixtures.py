@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from src.jobs.broker_watch import adapters
 from src.jobs.broker_watch.adapters import CHANGE_NOTE, DiscoveredDocument, HttpFetcher
 from src.jobs.broker_watch.config import load_broker_config
 from src.jobs.broker_watch.robots import RobotsRules
@@ -20,13 +21,13 @@ BROKERS = {b.slug: b for b in CONFIG.brokers}
 ISY = "arastirma.isyatirim.com.tr"
 YK = "www.ykyatirim.com.tr"
 GEDIK = "gedik.com"
-# What the Yapı Kredi adapter builds from the reports JSON (test_adapters) and a
-# token-style value, both carried as a query string that no rule may read as a path.
-YK_FILE_ENCODED = (
-    "/DetailPage/GetFilePath?url=%2FFiles%2FResearch%2F2026-09-14+Model+Portf%C3%B6y.pdf"
-)
-YK_FILE_TOKEN = (
-    "/DetailPage/GetFilePath?url=L0ZpbGVzL1Jlc2VhcmNoLzIwMjYtMDktMTQtTW9kZWwtUG9ydGZveS5wZGY"
+# Query-string URLs exactly as the adapters build them (adapters._with_query), so an
+# encoding change there is checked against the real rules here.
+ISY_FEED_PAGE_2 = adapters._with_query(BROKERS["is-yatirim"].url, paged=2)
+YK_GET_FILE = f"{BROKERS['yapi-kredi-yatirim'].site_url}/DetailPage/GetFilePath"
+YK_FILE_ENCODED = adapters._with_query(YK_GET_FILE, url=fx.YK_FILE_PATH)  # a filePath
+YK_FILE_TOKEN = adapters._with_query(  # a token-style filePath, as served live
+    YK_GET_FILE, url="L0ZpbGVzL1Jlc2VhcmNoLzIwMjYtMDktMTQtTW9kZWwtUG9ydGZveS5wZGY"
 )
 # cdn.gedik.com answered HTTP 400 with this Azure error body instead of a robots file.
 CDN_GEDIK_400_BODY = (
@@ -45,26 +46,31 @@ def _robots_text(host: str) -> str:
 
 
 @pytest.mark.parametrize(
-    "host, path, allowed",
+    "host, url, allowed",
     [
-        (ISY, "/category/son-haberler/toppick_deg/feed/", True),
-        (ISY, "/category/son-haberler/toppick_deg/feed/?paged=2", True),
-        (ISY, "/wp-content/uploads/2026/10/20_10_2026.pdf", True),
-        (ISY, "/wp-admin/", False),
-        (ISY, "/?add-to-cart=1", False),  # wildcard rule: Disallow: /*?add-to-cart=
-        (YK, "/hizmetler/arastirma", True),
-        (YK, "/DetailPage/GetResearchReports", True),
+        (ISY, BROKERS["is-yatirim"].url, True),
+        (ISY, ISY_FEED_PAGE_2, True),
+        (ISY, f"https://{ISY}/wp-content/uploads/2026/10/20_10_2026.pdf", True),
+        (ISY, f"https://{ISY}/wp-admin/", False),
+        (ISY, f"https://{ISY}/?add-to-cart=1", False),  # wildcard rule: Disallow: /*?add-to-cart=
+        (YK, adapters.YK_RESEARCH_PAGE, True),
+        (YK, BROKERS["yapi-kredi-yatirim"].url, True),
         (YK, YK_FILE_ENCODED, True),
         (YK, YK_FILE_TOKEN, True),
-        (YK, "/media/x.pdf", False),
-        (YK, "/getmedia/abc/x.pdf", False),
-        (GEDIK, "/analiz/model-portfoy/hisse-model-portfoy", True),
-        (GEDIK, "/arama?search=x", False),
+        (YK, f"https://{YK}/media/x.pdf", False),
+        (YK, f"https://{YK}/getmedia/abc/x.pdf", False),
+        (GEDIK, BROKERS["gedik-yatirim"].url, True),
+        (GEDIK, f"https://{GEDIK}/arama?search=x", False),
     ],
 )
-def test_live_robots_verdict_for_adapter_urls(host, path, allowed):
-    rules = RobotsRules(_robots_text(host), UA)
-    assert rules.can_fetch(f"https://{host}{path}") is allowed
+def test_live_robots_verdict_for_adapter_urls(host, url, allowed):
+    assert httpx.URL(url).host == host
+    assert RobotsRules(_robots_text(host), UA).can_fetch(url) is allowed
+
+
+def test_derived_urls_match_the_adapter_shapes():
+    assert ISY_FEED_PAGE_2.endswith("/toppick_deg/feed/?paged=2")
+    assert YK_FILE_ENCODED.endswith("?url=%2FFiles%2FResearch%2F2026-09-14+Model+Portf%C3%B6y.pdf")
 
 
 def test_config_urls_are_allowed_by_their_hosts_robots():

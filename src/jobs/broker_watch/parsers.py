@@ -120,7 +120,10 @@ def _loose(phrase: str) -> str:
     clause yields no event (the document is stored for review with "no portfolio
     change found"); otherwise it is merged into the next clause's scope, where
     ``_isy_weight_changes`` sees two weight nouns and flags that scope's events and
-    the document for review instead of trusting the inherited direction.
+    the document for review instead of trusting the inherited direction. That count
+    uses a loose noun stem ('ağırlı', 'ağrılı': ağırlığını, ağırlıklarımızı, ağırlık,
+    ...) so an unlisted noun form cannot hide a merged clause; synonyms such as
+    'payını' are not counted (known residual).
     """
     return " ".join(" ?".join(re.escape(char) for char in word) for word in phrase.split())
 
@@ -253,7 +256,9 @@ _ISY_TICKER_LABEL = re.compile(r"^(?:[A-Z0-9]{4,5}\.IS\s*(?:&|,|ve)?\s*)+:\s*")
 # the verb stem decides the direction. "ağrılığını" is the broker's own typo.
 _WEIGHT_NOUN_FORMS = ("ağırlığını", "ağrılığını", "ağırlıklarını")
 _WEIGHT_NOUN = "(?:" + "|".join(_loose(n) for n in _WEIGHT_NOUN_FORMS) + ")"
-_WEIGHT_NOUN_RE = re.compile(_WEIGHT_NOUN)
+# The clause-merge guard counts every weight-noun form (ağırlığını, ağırlıklarımızı,
+# ağırlık oranı, ...) by stem, so a merged clause with an unlisted form is still seen.
+_WEIGHT_NOUN_ANY_RE = re.compile("(?:" + _loose("ağırlı") + "|" + _loose("ağrılı") + ")")
 # Verb stems stay strict (no _loose): see its docstring.
 _WEIGHT_CLAUSE = re.compile(
     _WEIGHT_NOUN + r"\s[^;.]{0,60}?\b(indir|azalt|düşür|çek|artır|arttır|yükselt)"
@@ -310,7 +315,9 @@ def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str, 
     than one weight noun means an earlier clause's verb was not recognised (an
     unlisted verb, or a stem pypdf split such as 'i ndirirken') and that clause fell
     into this one: its tickers would inherit this verb's direction, so every event
-    of the scope is returned flagged and the document goes to review.
+    of the scope is returned flagged and the document goes to review. Nouns are
+    counted by stem (any 'ağırlı…' form); a synonym such as 'payını' would not be
+    counted, which is a known residual of this guard.
     """
     changes: list[tuple[str, str, str | None]] = []
     for sentence in _SENTENCE_BREAK.split(body):
@@ -321,7 +328,7 @@ def _isy_weight_changes(body: str, doc: ParsedDocument) -> list[tuple[str, str, 
             action = WEIGHT_DOWN if m.group(1) in _WEIGHT_DOWN_STEMS else WEIGHT_UP
             tickers = _tickers_in(scope, doc.warnings)
             review_reason = None
-            if len(_WEIGHT_NOUN_RE.findall(scope)) > 1:
+            if len(_WEIGHT_NOUN_ANY_RE.findall(scope)) > 1:
                 review_reason = "weight clause without a recognised verb"
                 doc.warnings.append(f"{review_reason}: {scope[:80]!r}")
                 doc.needs_review = True

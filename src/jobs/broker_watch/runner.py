@@ -56,6 +56,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.backfill != (args.since is not None):
         parser.error("--backfill and --since go together")
+    if not args.backfill and (
+        args.delay != DEFAULT_BACKFILL_DELAY or args.max_documents != DEFAULT_BACKFILL_MAX_DOCUMENTS
+    ):
+        parser.error("--delay and --max-documents apply to --backfill only")
     return args
 
 
