@@ -1,0 +1,31 @@
+tests/broker_watch/robots/README.md
+  s_3e6f9cdfbccd88::t_8ef0ecbf7f8db1 1-30
+tests/broker_watch/robots/arastirma.isyatirim.com.tr.txt
+  s_3e6f9cdfbccd88::t_7b4a5e27e38862 1-17
+tests/broker_watch/test_robots.py
+  s_3e6f9cdfbccd88::t_30796029d98959 51-63
+tests/broker_watch/test_robots_live_fixtures.py
+  s_3e6f9cdfbccd88::t_a3dc2a91160bd3 1-103
+tests/broker_watch/robots/gedik.com.txt
+  s_3e6f9cdfbccd88::t_7f2a998e8b215d 1-4
+tests/broker_watch/robots/www.ykyatirim.com.tr.txt
+  s_3e6f9cdfbccd88::t_1d73100b036ffc 1-5
+tests/broker_watch/robots/.gitattributes
+  s_3e6f9cdfbccd88::t_008e6a822cf677 1-2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "52651dca685cdb016ce7ed8d9dc2d0d99bbd26fe",
+  "prompts": {},
+  "sessions": {
+    "s_3e6f9cdfbccd88": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89ee580c-f84b-4918-9419-9b9b615328c1",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
