@@ -1,0 +1,35 @@
+src/jobs/README.md
+  s_3e6f9cdfbccd88::t_1adcecca6f5541 8
+src/jobs/broker_watch/adapters.py
+  s_3e6f9cdfbccd88::t_514858587327ed 14-19,220-221,269-270
+src/jobs/broker_watch/parsers.py
+  s_3e6f9cdfbccd88::t_7faf2eee5544dd 123-126,259-261,318-320,331
+src/jobs/broker_watch/runner.py
+  s_3e6f9cdfbccd88::t_8115d5d7afcca6 59-62
+src/jobs/broker_watch/service.py
+  s_3e6f9cdfbccd88::t_6bf612c0a59b36 11-14,243
+tests/broker_watch/test_parsers.py
+  s_3e6f9cdfbccd88::t_527d5ca06a5df5 360-377
+tests/broker_watch/test_robots_live_fixtures.py
+  s_3e6f9cdfbccd88::t_9beb62865d172d 10,24-30,49,51-57,60-63,66-73
+tests/broker_watch/test_runner.py
+  s_3e6f9cdfbccd88::t_d88d445076acfe 26-36
+tests/broker_watch/test_service.py
+  s_3e6f9cdfbccd88::t_d9c1716dbfcae7 11,514,518,522-525,527-535,537-538,541-546,548,550-553,565-568
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94ac8e5487d8670e83dff51f88a9b4b6534fbf31",
+  "prompts": {},
+  "sessions": {
+    "s_3e6f9cdfbccd88": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89ee580c-f84b-4918-9419-9b9b615328c1",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
