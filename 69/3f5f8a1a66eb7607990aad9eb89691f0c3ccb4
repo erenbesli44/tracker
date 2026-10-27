@@ -1,0 +1,21 @@
+src/jobs/broker_watch/parsers.py
+  s_3e6f9cdfbccd88::t_cfb8fdc8842110 118-123,209-214,216-218,256,296-297,304-306,309-313,315,323-327,334
+tests/broker_watch/test_parsers.py
+  s_3e6f9cdfbccd88::t_dab46d86c2e814 327-387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "693f5f8a1a66eb7607990aad9eb89691f0c3ccb4",
+  "prompts": {},
+  "sessions": {
+    "s_3e6f9cdfbccd88": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89ee580c-f84b-4918-9419-9b9b615328c1",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
