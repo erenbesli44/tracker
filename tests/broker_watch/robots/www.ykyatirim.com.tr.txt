@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /getmedia/*.pdf$
+Disallow: /media/*.pdf$
+Sitemap: https://www.ykyatirim.com.tr/sitemap.xml

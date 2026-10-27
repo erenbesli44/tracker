@@ -324,3 +324,82 @@ def test_isy_weight_clause_naming_more_companies_than_tickers_is_flagged():
     # As many genitives as tickers: not flagged (the 1 Sep note has TCMB’nin + 3 tickers).
     doc = parsers.parse_isy_rss(fx.ISY_1_SEP_TEXT, published_at=fx.ISY_1_SEP_DATE)
     assert not doc.needs_review
+
+
+# ── Step 3: clause-merge guard ────────────────────────────────────────────────
+
+
+def test_isy_split_verb_merges_into_next_clause_and_is_flagged():
+    # The real 1 Sep sentence with its first verb split by pypdf ('i ndirirken'): the
+    # Tüpraş clause has no recognised verb and falls into the scope of 'artırıyoruz'.
+    # Nothing may come out of that scope as an unflagged event, least of all TUPRS
+    # as weight_up; the direction is never guessed.
+    text = fx.ISY_1_SEP_PDF_SENTENCE.replace("indirirken", "i ndirirken")
+    assert text != fx.ISY_1_SEP_PDF_SENTENCE
+    doc = parsers.parse_isy_rss(text, published_at=fx.ISY_1_SEP_DATE)
+
+    events = _by_ticker(doc)
+    assert "TUPRS" not in events or events["TUPRS"].needs_review
+    assert all(e.needs_review for e in doc.events)
+    assert doc.needs_review
+    assert any("weight clause without a recognised verb" in w for w in doc.warnings)
+    assert not any(e.action == "weight_down" for e in doc.events)  # 'indir' was never seen
+    _assert_quotes_ok(doc, text)
+
+    # The unsplit sentence keeps its four unflagged events (guard does not fire).
+    doc = parsers.parse_isy_rss(fx.ISY_1_SEP_PDF_SENTENCE, published_at=fx.ISY_1_SEP_DATE)
+    assert [(e.ticker, e.action, e.needs_review) for e in doc.events] == [
+        ("TUPRS", "weight_down", False),
+        ("AKBNK", "weight_up", False),
+        ("GARAN", "weight_up", False),
+        ("ENJSA", "weight_up", False),
+    ]
+    assert not doc.needs_review
+
+
+def test_isy_unlisted_noun_form_in_merged_clause_is_flagged():
+    # Shape of the 5 Feb 2026 note ("Aksa Enerji ve Medical Park ağırlıklarımızı %2 şer
+    # arttırırken, … THY nin de ağırlığını %2 arttırıyoruz"), here with tickers: the first
+    # noun form is not a strict clause noun, so the clause merges into the next one. The
+    # guard counts nouns by stem and must flag every event rather than let AKSEN and MPARK
+    # inherit "indir".
+    text = (
+        "Model Portföy Değişiklikler AKSEN ve MPARK ağırlıklarımızı %2 şer arttırırken, "
+        "THYAO'nun ağırlığını %2 indiriyoruz. 05.02.2026"
+    )
+    doc = parsers.parse_isy_rss(text)
+
+    assert {e.ticker for e in doc.events} <= {"AKSEN", "MPARK", "THYAO"} and doc.events
+    assert all(e.needs_review for e in doc.events)
+    assert doc.needs_review
+    assert any("weight clause without a recognised verb" in w for w in doc.warnings)
+
+
+def test_isy_unlisted_verb_clause_is_flagged_not_merged_silently():
+    text = (
+        "Model Portföy Değişiklikler TUPRS ağırlığını sabit tutarken, AKBNK ağırlığını "
+        "artırıyoruz. 20.10.2026"
+    )
+    doc = parsers.parse_isy_rss(text)
+
+    events = _by_ticker(doc)
+    assert "TUPRS" not in events or events["TUPRS"].needs_review
+    assert events["AKBNK"].needs_review  # same scope, same doubt
+    assert doc.needs_review
+    assert any(w.startswith("weight clause without a recognised verb: ") for w in doc.warnings)
+    assert any(
+        "TUPRS weight_up: needs review (weight clause without a recognised verb)" == w
+        for w in doc.warnings
+    )
+
+    # Two recognised verbs in one sentence: two scopes, one noun each, nothing flagged.
+    text = (
+        "Model Portföy Değişiklikler TUPRS ağırlığını %7’ye indirirken, AKBNK ağırlığını "
+        "artırıyoruz. 20.10.2026"
+    )
+    doc = parsers.parse_isy_rss(text)
+    assert [(e.ticker, e.action, e.needs_review) for e in doc.events] == [
+        ("TUPRS", "weight_down", False),
+        ("AKBNK", "weight_up", False),
+    ]
+    assert not doc.needs_review

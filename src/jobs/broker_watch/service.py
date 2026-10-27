@@ -4,6 +4,14 @@ Idempotent: a document is stored once per sha256 (PDF URLs are also skipped when
 already stored), events once per (broker, ticker, action, event_date). At most
 ``max_runs_per_day`` runs are started per UTC day; later ones are recorded as
 ``skipped_rate_limit`` and do nothing.
+
+A backfill (``since``) is a one-off run that bypasses that limit, lets the fetcher
+follow the sources back to ``since`` with a courtesy delay, and is marked
+"backfill since <date>" as the first entry of the run's ``error_details`` (the only
+free-text field on the run row). ``max_documents`` is its safety cap, cumulative across
+sources and charged with the documents a source iterates (already-stored ones included):
+a source whose discovery would exceed what is left is recorded as failed, nothing of it
+is fetched and nothing is charged, so the later sources still run on the same budget.
 """
 
 import json
@@ -42,6 +50,7 @@ CHANGE_NOTE_PARSERS = {
     "gedik_page": parsers.parse_gedik_page,
 }
 SKIPPED_RATE_LIMIT = "skipped_rate_limit"
+BACKFILL_REQUEST_DELAY = 1.0  # seconds between live requests in a backfill
 
 
 @dataclass
@@ -73,13 +82,27 @@ class JobRunSummary:
 
 
 def run_once(
-    engine: Engine, config: BrokerWatchConfig, fetcher: SourceFetcher | None = None
+    engine: Engine,
+    config: BrokerWatchConfig,
+    fetcher: SourceFetcher | None = None,
+    *,
+    since: date | None = None,
+    request_delay: float | None = None,
+    max_documents: int | None = None,
 ) -> JobRunSummary:
-    """Process every enabled broker once; never raises for a single source's failure."""
+    """Process every enabled broker once; never raises for a single source's failure.
+
+    ``since`` runs a backfill (module docstring); ``request_delay`` defaults to
+    BACKFILL_REQUEST_DELAY in a backfill and 0 otherwise.
+    """
     if fetcher is not None:
-        return _run_once(engine, config, fetcher)
-    with HttpFetcher(config.defaults.user_agent) as http_fetcher:
-        return _run_once(engine, config, http_fetcher)
+        return _run_once(engine, config, fetcher, since, max_documents)
+    if request_delay is None:
+        request_delay = BACKFILL_REQUEST_DELAY if since else 0.0
+    with HttpFetcher(
+        config.defaults.user_agent, since=since, request_delay=request_delay
+    ) as http_fetcher:
+        return _run_once(engine, config, http_fetcher, since, max_documents)
 
 
 def _runs_started_today(session: Session) -> int:
@@ -90,10 +113,16 @@ def _runs_started_today(session: Session) -> int:
     return session.exec(stmt).one()
 
 
-def _run_once(engine: Engine, config: BrokerWatchConfig, fetcher: SourceFetcher) -> JobRunSummary:
+def _run_once(
+    engine: Engine,
+    config: BrokerWatchConfig,
+    fetcher: SourceFetcher,
+    since: date | None = None,
+    max_documents: int | None = None,
+) -> JobRunSummary:
     with Session(engine) as session:
         run = BrokerWatchRun()
-        if _runs_started_today(session) >= config.defaults.max_runs_per_day:
+        if since is None and _runs_started_today(session) >= config.defaults.max_runs_per_day:
             run.status = SKIPPED_RATE_LIMIT
             run.finished_at = utc_now()
         session.add(run)
@@ -109,11 +138,19 @@ def _run_once(engine: Engine, config: BrokerWatchConfig, fetcher: SourceFetcher)
             return JobRunSummary(run_id=run_id, status=SKIPPED_RATE_LIMIT)
 
     summary = JobRunSummary(run_id=run_id)
-    errors: list[str] = []
-    logger.info("Broker watch run %d started (brokers=%d)", run_id, len(config.enabled_brokers))
+    details: list[str] = [f"backfill since {since.isoformat()}"] if since else []
+    logger.info(
+        "Broker watch run %d started (brokers=%d%s)",
+        run_id,
+        len(config.enabled_brokers),
+        f", {details[0]}, max_documents={max_documents}" if since else "",
+    )
 
+    remaining = max_documents
     for broker_cfg in config.enabled_brokers:
-        result = _process_source(engine, broker_cfg, fetcher)
+        result = _process_source(engine, broker_cfg, fetcher, remaining)
+        if remaining is not None:
+            remaining = max(remaining - result.documents_seen, 0)
         summary.sources.append(result)
         summary.sources_scanned += 1
         summary.sources_failed += result.status == "failed"
@@ -122,7 +159,7 @@ def _run_once(engine: Engine, config: BrokerWatchConfig, fetcher: SourceFetcher)
         summary.snapshots_new += result.snapshots_new
         summary.errors_count += result.errors_count
         if result.error_detail:
-            errors.append(f"{broker_cfg.name}: {result.error_detail}")
+            details.append(f"{broker_cfg.name}: {result.error_detail}")
 
         with Session(engine) as session:
             session.add(
@@ -171,7 +208,7 @@ def _run_once(engine: Engine, config: BrokerWatchConfig, fetcher: SourceFetcher)
         run.events_new = summary.events_new
         run.snapshots_new = summary.snapshots_new
         run.errors_count = summary.errors_count
-        run.error_details = json.dumps(errors) if errors else None
+        run.error_details = json.dumps(details) if details else None
         session.add(run)
         session.commit()
 
@@ -180,7 +217,10 @@ def _run_once(engine: Engine, config: BrokerWatchConfig, fetcher: SourceFetcher)
 
 
 def _process_source(
-    engine: Engine, broker_cfg: WatchedBroker, fetcher: SourceFetcher
+    engine: Engine,
+    broker_cfg: WatchedBroker,
+    fetcher: SourceFetcher,
+    max_documents: int | None = None,
 ) -> SourceJobResult:
     result = SourceJobResult(broker_slug=broker_cfg.slug, broker_name=broker_cfg.name)
     with Session(engine) as session:
@@ -192,6 +232,20 @@ def _process_source(
             result.status = "failed"
             result.errors_count = 1
             result.error_detail = f"discover: {type(exc).__name__}: {str(exc)[:400]}"
+            return result
+        if max_documents is not None and len(docs) > max_documents:
+            logger.error(
+                "Discovery for %s found %d documents, above the remaining cap of %d: not fetched",
+                broker_cfg.slug,
+                len(docs),
+                max_documents,
+            )
+            result.status = "failed"  # documents_seen stays 0: nothing iterated, nothing charged
+            result.errors_count = 1
+            result.error_detail = (
+                f"discover: {len(docs)} documents exceed the remaining cap of "
+                f"{max_documents}; nothing fetched"
+            )
             return result
 
         for doc in docs:

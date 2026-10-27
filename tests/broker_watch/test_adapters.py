@@ -384,3 +384,123 @@ def test_robots_server_error_or_unreachable_disallows_the_host_this_run(robots, 
 
     assert site.urls() == ["https://gedik.com/robots.txt"]
     assert "disallowing the host this run" in caplog.text
+
+
+# ── Step 3: backfill discovery (since filter, paged feed stop, courtesy delay) ──
+
+SINCE = date(2026, 1, 1)
+
+
+def _backfill_fetcher(site: FakeSites, **kwargs) -> HttpFetcher:
+    return HttpFetcher(UA, transport=httpx.MockTransport(site), since=SINCE, **kwargs)
+
+
+def test_backfill_isy_follows_pages_until_every_item_predates_since(caplog):
+    site = FakeSites()
+    site.add(fx.ISY_FEED_URL, fx.ISY_BACKFILL_PAGES[1])
+    site.add(f"{fx.ISY_FEED_URL}?paged=2", fx.ISY_BACKFILL_PAGES[2])  # Feb 2026 + Dec 2025
+    site.add(f"{fx.ISY_FEED_URL}?paged=3", fx.ISY_BACKFILL_PAGES[3])  # Dec 2025 only
+    site.add(f"{fx.ISY_FEED_URL}?paged=4", fx.ISY_BACKFILL_PAGES[3])  # must not be requested
+    broker = BROKERS["is-yatirim"].model_copy(update={"max_pages": 1})  # ignored in a backfill
+
+    with caplog.at_level("INFO"), _backfill_fetcher(site) as fetcher:
+        docs = fetcher.discover(broker)
+
+    assert [(d.file_url, d.published_at) for d in docs] == [
+        (fx.ISY_PDF_20_OCT, date(2026, 10, 20)),
+        (fx.ISY_PDF_1_SEP, date(2026, 9, 1)),
+        (fx.ISY_PDF_5_FEB, date(2026, 2, 5)),
+    ]  # the Dec 2025 item on the straddling page is skipped, page 3 stops the walk
+    assert site.urls() == [
+        "https://arastirma.isyatirim.com.tr/robots.txt",
+        fx.ISY_FEED_URL,
+        f"{fx.ISY_FEED_URL}?paged=2",
+        f"{fx.ISY_FEED_URL}?paged=3",
+    ]
+    assert "İş feed page 3: every item predates 2026-01-01, stopping" in caplog.text
+    _assert_bot_headers(site)
+
+
+def test_backfill_isy_keeps_undated_items_and_stops_at_the_hard_cap(monkeypatch):
+    monkeypatch.setattr(adapters, "BACKFILL_MAX_PAGES", 2)
+    site = FakeSites()
+    site.add(fx.ISY_FEED_URL, fx.ISY_FEED_PAGE_1)  # items without pubDate: kept
+    site.add(f"{fx.ISY_FEED_URL}?paged=2", fx.ISY_FEED_PAGE_2)
+    site.add(f"{fx.ISY_FEED_URL}?paged=3", fx.ISY_FEED_PAGE_2)
+
+    with _backfill_fetcher(site) as fetcher:
+        docs = fetcher.discover(BROKERS["is-yatirim"])
+
+    assert [d.file_url for d in docs] == [fx.ISY_PDF_20_OCT, fx.ISY_PDF_1_SEP, fx.ISY_PDF_5_FEB]
+    assert f"{fx.ISY_FEED_URL}?paged=3" not in site.urls()
+
+
+def test_isy_discover_without_since_ignores_pubdate():
+    site = FakeSites()
+    site.add(fx.ISY_FEED_URL, fx.ISY_BACKFILL_PAGES[2])  # Feb 2026 + Dec 2025 on page 1
+
+    with site.fetcher() as fetcher:
+        docs = fetcher.discover(BROKERS["is-yatirim"].model_copy(update={"max_pages": 1}))
+
+    assert [d.file_url for d in docs] == [fx.ISY_PDF_5_FEB, fx.ISY_PDF_15_DEC_2025]
+
+
+def test_backfill_gedik_skips_update_pdfs_dated_before_since(caplog):
+    site = FakeSites()
+    site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML_BACKFILL)
+    broker = BROKERS["gedik-yatirim"]
+
+    with caplog.at_level("INFO"), _backfill_fetcher(site) as fetcher:
+        docs = fetcher.discover(broker)
+
+    assert [(d.kind, d.file_url) for d in docs] == [
+        (COMPOSITION, None),
+        (CHANGE_NOTE, fx.GEDIK_PDF_22_SEP),
+        (CHANGE_NOTE, fx.GEDIK_PDF_6_AUG),
+    ]
+    assert "Gedik page lists 3 update PDF(s): 2 dated from 2026-01-01 on, 1 older skipped" in (
+        caplog.text
+    )
+
+    with site.fetcher() as fetcher:  # no backfill: every update PDF is listed
+        assert [d.file_url for d in fetcher.discover(broker)][1:] == [
+            fx.GEDIK_PDF_22_SEP,
+            fx.GEDIK_PDF_6_AUG,
+            fx.GEDIK_PDF_15_DEC_2025,
+        ]
+
+
+def test_backfill_yk_skips_reports_posted_before_since():
+    site = FakeSites()
+    site.add(fx.YK_RESEARCH_PAGE, "<html>arastirma</html>")
+    site.add(fx.YK_REPORTS_URL, fx.YK_REPORTS_JSON_BACKFILL)
+    broker = BROKERS["yapi-kredi-yatirim"]
+
+    with _backfill_fetcher(site) as fetcher:
+        assert [d.published_at for d in fetcher.discover(broker)] == [date(2026, 9, 14)]
+    with site.fetcher() as fetcher:
+        assert [d.published_at for d in fetcher.discover(broker)] == [
+            date(2026, 9, 14),
+            date(2025, 12, 1),
+        ]
+
+
+def test_request_delay_is_slept_between_requests_and_requests_are_counted(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr(adapters.time, "sleep", sleeps.append)
+    site = FakeSites()
+    site.add(fx.GEDIK_PAGE_URL, fx.GEDIK_PAGE_HTML)
+    site.add(fx.GEDIK_PDF_22_SEP, fx.minimal_pdf(["x"]))
+    broker = BROKERS["gedik-yatirim"]
+
+    with _backfill_fetcher(site, request_delay=0.5) as fetcher:
+        docs = fetcher.discover(broker)
+        fetcher.fetch(broker, docs[1])
+        assert fetcher.requests_sent == 4  # robots, page, cdn robots, pdf
+
+    assert sleeps == [0.5, 0.5, 0.5]  # never before the first request
+
+    sleeps.clear()
+    with site.fetcher() as fetcher:  # default: no delay (tests, normal runs)
+        fetcher.discover(broker)
+    assert sleeps == []

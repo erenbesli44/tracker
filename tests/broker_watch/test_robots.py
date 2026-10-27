@@ -48,6 +48,19 @@ def test_can_fetch(robots, allowed):
     assert {url: rules.can_fetch(url) for url in allowed} == allowed
 
 
+def test_groups_with_the_same_token_are_merged():
+    # RFC 9309 §2.2.1: rules of every group for one product token apply together, so the
+    # second ``User-agent: *`` group (İş Yatırım's YOAST block) is not dropped and an
+    # empty ``Disallow:`` there does not cancel the first group's rules.
+    robots = "User-agent: *\nDisallow: /a/\n\nUser-agent: *\nDisallow: /b/\n"
+    rules = RobotsRules(robots, UA)
+    assert not rules.can_fetch("https://x.com/a/1") and not rules.can_fetch("https://x.com/b/1")
+    assert rules.can_fetch("https://x.com/c/1")
+
+    robots = "User-agent: *\nDisallow: /a/\n\nUser-agent: *\nDisallow:\n"
+    assert not RobotsRules(robots, UA).can_fetch("https://x.com/a/1")
+
+
 def test_disallow_all_blocks_every_url():
     rules = RobotsRules.disallow_all()
     assert not rules.can_fetch(PAGE) and not rules.can_fetch("https://cdn.gedik.com/")
