@@ -589,7 +589,7 @@ def _classification_from_llm_payload(
     session: Session,
     payload: dict,
     *,
-    max_mentions: int | None = 5,
+    max_mentions: int | None = 8,
 ) -> IngestionClassificationInput | None:
     primary_topic = ""
     primary_topic_block = payload.get("primary_topic")

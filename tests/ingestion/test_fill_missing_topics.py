@@ -259,3 +259,19 @@ async def test_fill_endpoints_single_flight_and_api_key(client: AsyncClient, mon
     assert (
         await client.get("/ingestions/fill-missing-topics", headers={"X-API-Key": "wrong"})
     ).status_code in (401, 403)
+
+
+def test_classification_keeps_up_to_eight_mentions(session: Session):
+    slugs = [
+        "faiz-para-politikasi", "doviz-kur", "enflasyon", "jeopolitik", "petrol-enerji",
+        "bist-turk-piyasalari", "altin", "gumus", "kripto-paralar",
+    ]
+    payload = {"topic_segments": [{"subtopic": s, "summary": "s"} for s in slugs]}
+    result = service._classification_from_llm_payload(session, payload)
+    # the 6th-8th topics (altin is 7th) are kept; the cap matches prompt rule 7
+    assert len(result.topic_mentions) == 8
+    assert len(
+        service._classification_from_llm_payload(
+            session, payload, max_mentions=None
+        ).topic_mentions
+    ) == 9
