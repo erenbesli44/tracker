@@ -1,8 +1,10 @@
-from fastapi import APIRouter, status
+from typing import Annotated
+
+from fastapi import APIRouter, BackgroundTasks, Query, status
 from pydantic import Field
 
-from src.database import SessionDep
-from src.ingestion import service
+from src.database import SessionDep, engine
+from src.ingestion import fill_missing_topics, service
 from src.ingestion.schemas import (
     IngestionYoutubeChannelRunRequest,
     IngestionYoutubeChannelRunResponse,
@@ -56,3 +58,40 @@ def ingest_youtube_channel(
     session: SessionDep,
 ) -> IngestionYoutubeChannelRunResponse:
     return service.ingest_youtube_channel(session, data)
+
+
+@router.post(
+    "/fill-missing-topics",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Re-analyse recent videos on the full transcript and add only missing topics",
+)
+def start_fill_missing_topics(
+    background_tasks: BackgroundTasks,
+    days: Annotated[int, Query(ge=1, le=90)] = 14,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 50,
+    workers: Annotated[int, Query(ge=1, le=4)] = 2,
+    dry_run: bool = True,
+) -> dict:
+    state = fill_missing_topics.fill_state()
+    if state.get("running"):
+        return {"status": "already_running", **state}
+    background_tasks.add_task(
+        fill_missing_topics.run_fill,
+        engine,
+        days=days,
+        limit=limit,
+        workers=workers,
+        dry_run=dry_run,
+    )
+    return {
+        "status": "accepted",
+        "days": days,
+        "limit": limit,
+        "workers": workers,
+        "dry_run": dry_run,
+    }
+
+
+@router.get("/fill-missing-topics", summary="Progress of the fill-missing-topics run")
+def fill_missing_topics_status() -> dict:
+    return fill_missing_topics.fill_state()

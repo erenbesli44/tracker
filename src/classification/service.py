@@ -7,6 +7,7 @@ from src.classification.models import TopicMention
 from src.classification.schemas import (
     ClassificationRequest,
     ClassificationResponse,
+    TopicMentionCreate,
     TopicMentionResponse,
 )
 from src.videos.models import Video
@@ -37,6 +38,46 @@ def _mention_to_response(mention: TopicMention) -> TopicMentionResponse:
     )
 
 
+def mention_person_id(session: Session, video: Video) -> int | None:
+    """Person a new mention of this video belongs to.
+
+    Multi-guest channels: the speaker of each view is set later by the outlook
+    step (src/persons/participants.py), never the video's headline guest.
+    """
+    if video.channel_id is not None:
+        from src.channels.models import YouTubeChannel
+        from src.persons import detector
+
+        channel = session.get(YouTubeChannel, video.channel_id)
+        if channel is not None and detector.is_multi_guest_channel(channel.channel_handle):
+            return None
+    return video.person_id
+
+
+def add_mentions(
+    session: Session, video: Video, items: list[TopicMentionCreate]
+) -> list[TopicMention]:
+    """Add mention rows for a video (not committed); existing rows are left alone."""
+    person_id = mention_person_id(session, video)
+    mentions = []
+    for item in items:
+        mention = TopicMention(
+            video_id=video.id,
+            channel_id=video.channel_id,
+            person_id=person_id,
+            topic_id=item.topic_id,
+            summary=item.summary,
+            sentiment=item.sentiment,
+            key_levels=json.dumps(item.key_levels) if item.key_levels else None,
+            start_time=item.start_time,
+            end_time=item.end_time,
+            confidence=item.confidence,
+        )
+        session.add(mention)
+        mentions.append(mention)
+    return mentions
+
+
 def classify_video(
     session: Session,
     video: Video,
@@ -50,33 +91,7 @@ def classify_video(
         session.delete(mention)
     session.flush()
 
-    # Multi-guest channels: the speaker of each view is set later by the outlook
-    # step (src/persons/participants.py), never the video's headline guest.
-    mention_person_id = video.person_id
-    if video.channel_id is not None:
-        from src.channels.models import YouTubeChannel
-        from src.persons import detector
-
-        channel = session.get(YouTubeChannel, video.channel_id)
-        if channel is not None and detector.is_multi_guest_channel(channel.channel_handle):
-            mention_person_id = None
-
-    mentions = []
-    for item in data.topic_mentions:
-        mention = TopicMention(
-            video_id=video.id,
-            channel_id=video.channel_id,
-            person_id=mention_person_id,
-            topic_id=item.topic_id,
-            summary=item.summary,
-            sentiment=item.sentiment,
-            key_levels=json.dumps(item.key_levels) if item.key_levels else None,
-            start_time=item.start_time,
-            end_time=item.end_time,
-            confidence=item.confidence,
-        )
-        session.add(mention)
-        mentions.append(mention)
+    mentions = add_mentions(session, video, data.topic_mentions)
 
     session.commit()
     for m in mentions:

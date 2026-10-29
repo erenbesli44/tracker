@@ -132,13 +132,29 @@ def parse_outlook_items(payload: dict[str, Any], mention_ids: set[int]) -> dict[
     return out
 
 
-def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> dict[int, dict]:
-    """Classify every tracked-instrument mention of one video. Returns {mention_id: fields}."""
-    rows = session.exec(
+def classify_video(
+    session: Session,
+    video: Video,
+    *,
+    dry_run: bool = False,
+    mention_ids: set[int] | None = None,
+) -> dict[int, dict]:
+    """Classify the tracked-instrument mentions of one video. Returns {mention_id: fields}.
+
+    ``mention_ids`` limits the step to those mentions; the others keep their views.
+    """
+    stmt = (
         select(TopicMention, Topic)
         .join(Topic, TopicMention.topic_id == Topic.id)
         .where(TopicMention.video_id == video.id)
         .where(Topic.slug.in_(list(INSTRUMENTS)))
+    )
+    if mention_ids is not None:
+        if not mention_ids:
+            return {}
+        stmt = stmt.where(TopicMention.id.in_(list(mention_ids)))
+    rows = session.exec(
+        stmt
         # Load only pre-existing columns so a dry run works against a schema
         # that does not have the outlook columns yet.
         .options(
@@ -214,7 +230,7 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
                 setattr(mention, k, fields[k])
             mention.outlook_version = OUTLOOK_PROMPT_VERSION
             session.add(mention)
-        if participants is not None:
+        if participants is not None and mention_ids is None:
             _clear_other_mention_persons(session, video.id, {m.id for m, _ in rows})
         session.commit()
     return results
