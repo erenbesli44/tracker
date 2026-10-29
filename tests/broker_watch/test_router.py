@@ -110,3 +110,83 @@ async def test_health_reports_per_source_counters_and_skipped_runs(
     assert body["last_24h"]["runs_failed"] == 0 and body["verdict"] == "healthy"
     sources = {s["slug"]: s for s in body["sources"]}
     assert sources["gedik-yatirim"]["events_flagged"] == 0  # counters of the last real scan
+
+
+async def test_backfill_endpoint_runs_one_backfill_in_the_background(
+    client: AsyncClient, session: Session, monkeypatch
+):
+    from datetime import date
+
+    from src.jobs.broker_watch import router as broker_router
+
+    calls = []
+    real_run_once = service.run_once
+
+    def fake_run_once(engine, config, *, since, max_documents):
+        calls.append((since, max_documents))
+        return real_run_once(
+            session.get_bind(), config, fetcher=FakeFetcher(_default_docs()), since=since
+        )
+
+    monkeypatch.setattr(broker_router.service, "run_once", fake_run_once)
+
+    response = await client.post("/jobs/broker-watch/backfill", params={"since": "2026-01-01"})
+
+    assert response.status_code == 202
+    assert response.json() == {"status": "accepted", "since": "2026-01-01", "max_documents": 40}
+    assert calls == [(date(2026, 1, 1), 40)]  # background task ran after the response
+    state = (await client.get("/jobs/broker-watch/backfill")).json()
+    assert state["running"] is False and state["status"] == "success" and state["error"] is None
+    runs = (await client.get("/jobs/broker-watch/runs")).json()
+    assert runs["count"] == 1
+    assert runs["runs"][0]["error_details"] == ["backfill since 2026-01-01"]
+
+
+async def test_backfill_endpoint_reports_a_failed_run(client: AsyncClient, monkeypatch):
+    from src.jobs.broker_watch import router as broker_router
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("database unreachable")
+
+    monkeypatch.setattr(broker_router.service, "run_once", boom)
+
+    response = await client.post("/jobs/broker-watch/backfill", params={"since": "2026-01-01"})
+    assert response.status_code == 202
+    state = (await client.get("/jobs/broker-watch/backfill")).json()
+    assert state["running"] is False
+    assert state["status"] == "error" and "database unreachable" in state["error"]
+    # the lock was released: a second request is accepted again
+    again = await client.post("/jobs/broker-watch/backfill", params={"since": "2026-01-01"})
+    assert again.json()["status"] == "accepted"
+
+
+async def test_backfill_endpoint_refuses_a_second_run_while_one_is_running(
+    client: AsyncClient,
+):
+    from src.jobs.broker_watch import router as broker_router
+
+    assert broker_router._backfill_lock.acquire(blocking=False)
+    broker_router._backfill_state.update(running=True, since="2026-01-01")
+    try:
+        response = await client.post("/jobs/broker-watch/backfill", params={"since": "2026-01-01"})
+        assert response.status_code == 202
+        assert response.json()["status"] == "already_running"
+    finally:
+        broker_router._backfill_state["running"] = False
+        broker_router._backfill_lock.release()
+
+
+async def test_backfill_endpoint_validates_input_and_requires_the_key(client: AsyncClient):
+    assert (await client.post("/jobs/broker-watch/backfill")).status_code == 422  # since required
+    future = await client.post("/jobs/broker-watch/backfill", params={"since": "2999-01-01"})
+    assert future.status_code == 422
+    too_many = await client.post(
+        "/jobs/broker-watch/backfill", params={"since": "2026-01-01", "max_documents": 500}
+    )
+    assert too_many.status_code == 422
+    anonymous = await client.post(
+        "/jobs/broker-watch/backfill",
+        params={"since": "2026-01-01"},
+        headers={"X-API-Key": ""},
+    )
+    assert anonymous.status_code == 401

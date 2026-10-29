@@ -1,21 +1,77 @@
-"""Read-only HTTP access to broker watch job history and health."""
+"""HTTP access to broker watch job history and health, plus an operator endpoint that
+starts a one-off backfill in the background (the Coolify terminal is not usable for the
+tracker, so the CLI runner cannot be started there)."""
 
 import json
+import logging
+import threading
 from collections import Counter
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlalchemy import func
 from sqlmodel import select
 
 from src.config import settings
-from src.database import SessionDep
+from src.database import SessionDep, engine
+from src.jobs.broker_watch import service
 from src.jobs.broker_watch.config import load_broker_config
 from src.jobs.broker_watch.models import BrokerWatchRun, BrokerWatchSourceResult
 from src.models import utc_now
 
 router = APIRouter(prefix="/jobs/broker-watch", tags=["jobs"])
+logger = logging.getLogger(__name__)
+
+_backfill_lock = threading.Lock()
+_backfill_state: dict = {"running": False}
+
+
+def _run_backfill(since: date, max_documents: int) -> None:
+    """Background task: one backfill run, same as ``runner --backfill --since``."""
+    try:
+        config = load_broker_config()
+        summary = service.run_once(engine, config, since=since, max_documents=max_documents)
+        _backfill_state.update(
+            run_id=summary.run_id, status=summary.status, error=None, finished_at=utc_now()
+        )
+    except Exception as exc:  # a background task must not die silently
+        logger.exception("Broker watch backfill failed")
+        _backfill_state.update(status="error", error=str(exc)[:300], finished_at=utc_now())
+    finally:
+        _backfill_state["running"] = False
+        _backfill_lock.release()
+
+
+@router.post(
+    "/backfill",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start one broker-watch backfill run in the background",
+)
+def start_backfill(
+    background_tasks: BackgroundTasks,
+    since: Annotated[date, Query(description="Only documents dated on or after this day")],
+    max_documents: Annotated[int, Query(ge=1, le=100)] = 40,
+) -> dict:
+    if since > utc_now().date() or since.year < 2000:
+        raise HTTPException(status_code=422, detail="since must be a past date from 2000 on")
+    if not _backfill_lock.acquire(blocking=False):
+        return {**_backfill_state, "status": "already_running"}
+    _backfill_state.clear()
+    _backfill_state.update(
+        running=True,
+        since=since.isoformat(),
+        max_documents=max_documents,
+        started_at=utc_now(),
+    )
+    background_tasks.add_task(_run_backfill, since, max_documents)
+    return {"status": "accepted", "since": since.isoformat(), "max_documents": max_documents}
+
+
+@router.get("/backfill", summary="State of the last backfill started through the API")
+def backfill_state() -> dict:
+    return dict(_backfill_state)
+
 
 STALE_AFTER = timedelta(days=7)
 
