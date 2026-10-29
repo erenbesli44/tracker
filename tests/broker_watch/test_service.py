@@ -346,6 +346,63 @@ def test_consistency_check_ignores_same_day_current_snapshot(session: Session):
     assert service.check_snapshot_consistency(session, broker.id) == 1
 
 
+def _note(session, broker, day, name) -> BrokerDocument:
+    note = BrokerDocument(
+        broker_id=broker.id,
+        kind=CHANGE_NOTE,
+        source_url=f"https://example.com/{name}.pdf",
+        sha256=sha256_hex(name.encode("utf-8")),
+        text="metin",
+        published_at=day,
+    )
+    session.add(note)
+    session.commit()
+    return note
+
+
+def test_consistency_check_skips_event_when_an_unread_note_lies_before_the_snapshot(
+    session: Session,
+):
+    # Gedik 2026: KCAER added on 5 May, removed in the 2 Jul prose note the parser cannot
+    # read; the composition page (no date) is snapshotted on the fetch day in October.
+    broker, document = _seed(session)
+    event = _event(session, broker, document, "KCAER", "added", date(2026, 5, 5))
+    unread = _note(session, broker, date(2026, 7, 2), "prose")
+    _snapshot(session, broker, document, date(2026, 10, 29), ["ASTOR"])
+
+    assert service.check_snapshot_consistency(session, broker.id) == 0
+    session.refresh(event)
+    assert event.review_status == "auto"
+
+    # Once that note yields an event, it is no longer unknown and the check applies again.
+    _event(session, broker, unread, "TUPRS", "removed", date(2026, 7, 2))
+    assert service.check_snapshot_consistency(session, broker.id) == 1
+    session.refresh(event)
+    assert event.review_status == "needs_review"
+
+
+def test_consistency_check_leaves_superseded_event_to_the_later_one(session: Session):
+    broker, document = _seed(session)
+    added = _event(session, broker, document, "SAHOL", "added", date(2026, 10, 20))
+    removed = _event(session, broker, document, "SAHOL", "removed", date(2026, 10, 28))
+    _snapshot(session, broker, document, date(2026, 10, 29), ["ASTOR"])  # SAHOL gone: agrees
+
+    assert service.check_snapshot_consistency(session, broker.id) == 0
+    for row in (added, removed):
+        session.refresh(row)
+    assert (added.review_status, removed.review_status) == ("auto", "auto")
+
+
+def test_consistency_check_ignores_unread_notes_outside_the_window(session: Session):
+    broker, document = _seed(session)
+    _event(session, broker, document, "ASTOR", "added", date(2026, 9, 22))
+    _note(session, broker, date(2026, 9, 1), "before")  # before the event
+    _note(session, broker, date(2026, 11, 2), "after")  # after the snapshot
+    _snapshot(session, broker, document, date(2026, 10, 26), ["AKSA"])  # no ASTOR
+
+    assert service.check_snapshot_consistency(session, broker.id) == 1
+
+
 def test_consistency_check_leaves_events_without_later_snapshot_alone(session: Session):
     broker, document = _seed(session)
     event = _event(session, broker, document, "ASTOR", "added", date(2026, 9, 22))

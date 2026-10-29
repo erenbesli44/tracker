@@ -24,6 +24,7 @@ from sqlmodel import Session, select
 
 from src.jobs.broker_watch import parsers
 from src.jobs.broker_watch.adapters import (
+    CHANGE_NOTE,
     COMPOSITION,
     DiscoveredDocument,
     FetchedDocument,
@@ -435,6 +436,41 @@ def _store_document(
     return events_new, snapshots_new, error if status == "failed" else None
 
 
+def _changed_before(session: Session, event: ModelPortfolioEvent, until: date) -> bool:
+    """True when the broker may have changed ``event.ticker`` after the event and on or
+    before ``until``: a later added/removed event for the same ticker (that one is checked
+    against the snapshot itself), or a change note dated in between that yielded no event
+    at all, so its changes are unknown (Gedik's prose and chart notes; Gedik's composition
+    page carries no date, so its snapshot is dated on the fetch day, months later).
+    """
+    later_event = session.exec(
+        select(ModelPortfolioEvent.id).where(
+            ModelPortfolioEvent.broker_id == event.broker_id,
+            ModelPortfolioEvent.ticker == event.ticker,
+            ModelPortfolioEvent.action.in_((parsers.ADDED, parsers.REMOVED)),
+            ModelPortfolioEvent.event_date > event.event_date,
+            ModelPortfolioEvent.event_date <= until,
+        )
+    ).first()
+    if later_event is not None:
+        return True
+    has_events = (
+        select(ModelPortfolioEvent.id)
+        .where(ModelPortfolioEvent.document_id == BrokerDocument.id)
+        .exists()
+    )
+    unread_note = session.exec(
+        select(BrokerDocument.id).where(
+            BrokerDocument.broker_id == event.broker_id,
+            BrokerDocument.kind == CHANGE_NOTE,
+            BrokerDocument.published_at > event.event_date,
+            BrokerDocument.published_at <= until,
+            ~has_events,
+        )
+    ).first()
+    return unread_note is not None
+
+
 def check_snapshot_consistency(session: Session, broker_id: int) -> int:
     """Plan criterion D: an ``auto`` added/removed event must agree with the broker's
     next snapshot; otherwise it becomes ``needs_review``.
@@ -444,7 +480,9 @@ def check_snapshot_consistency(session: Session, broker_id: int) -> int:
     and not a removed one; or a ``pre_change`` snapshot (Yapı Kredi's page-2 table)
     dated on or after the event -- on the event's own day it is the opposite: the
     removed ticker is still listed and the added one not yet. Weight events and
-    events without such a snapshot are left alone. Returns the number flagged.
+    events without such a snapshot are left alone, and so are events the broker may
+    have overtaken before that snapshot (``_changed_before``): the snapshot is not
+    evidence about them. Returns the number flagged.
     """
     events = session.exec(
         select(ModelPortfolioEvent).where(
@@ -469,7 +507,7 @@ def check_snapshot_consistency(session: Session, broker_id: int) -> int:
             )
             .order_by(ModelPortfolioSnapshot.as_of, ModelPortfolioSnapshot.id)
         ).first()
-        if snapshot is None:
+        if snapshot is None or _changed_before(session, event, snapshot.as_of):
             continue
         listed = event.ticker in {item["ticker"] for item in json.loads(snapshot.items_json)}
         expected = event.action == parsers.ADDED
