@@ -11,6 +11,7 @@ outlook = NULL. Failures never break ingestion: the mention stays NULL and the
 backfill script (scripts/backfill_outlook.py) picks it up later.
 """
 
+import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -132,13 +133,29 @@ def parse_outlook_items(payload: dict[str, Any], mention_ids: set[int]) -> dict[
     return out
 
 
-def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> dict[int, dict]:
-    """Classify every tracked-instrument mention of one video. Returns {mention_id: fields}."""
-    rows = session.exec(
+def classify_video(
+    session: Session,
+    video: Video,
+    *,
+    dry_run: bool = False,
+    mention_ids: set[int] | None = None,
+) -> dict[int, dict]:
+    """Classify the tracked-instrument mentions of one video. Returns {mention_id: fields}.
+
+    ``mention_ids`` limits the step to those mentions; the others keep their views.
+    """
+    stmt = (
         select(TopicMention, Topic)
         .join(Topic, TopicMention.topic_id == Topic.id)
         .where(TopicMention.video_id == video.id)
         .where(Topic.slug.in_(list(INSTRUMENTS)))
+    )
+    if mention_ids is not None:
+        if not mention_ids:
+            return {}
+        stmt = stmt.where(TopicMention.id.in_(list(mention_ids)))
+    rows = session.exec(
+        stmt
         # Load only pre-existing columns so a dry run works against a schema
         # that does not have the outlook columns yet.
         .options(
@@ -174,9 +191,15 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
     # Multi-guest channels: name the guests so each view can be attributed (OI-018).
     participants = None
     if channel is not None and detector.is_multi_guest_channel(channel.channel_handle):
-        participants = participants_service.detect_participants(
-            session, video, channel.name, segments, dry_run=dry_run
-        )
+        cached = session.get(VideoParticipants, video.id) if mention_ids is not None else None
+        if cached is not None:
+            # Subset run: attribute against the stored participants, never rewrite them.
+            participants = json.loads(cached.participants_json or "[]")
+        else:
+            participants = participants_service.detect_participants(
+                session, video, channel.name, segments,
+                dry_run=dry_run or mention_ids is not None,
+            )
         speaker = participants_service.speaker_context(participants)
 
     payload = llm_service.generate_outlook_json(
@@ -214,7 +237,7 @@ def classify_video(session: Session, video: Video, *, dry_run: bool = False) -> 
                 setattr(mention, k, fields[k])
             mention.outlook_version = OUTLOOK_PROMPT_VERSION
             session.add(mention)
-        if participants is not None:
+        if participants is not None and mention_ids is None:
             _clear_other_mention_persons(session, video.id, {m.id for m, _ in rows})
         session.commit()
     return results
@@ -318,6 +341,21 @@ def pending_video_ids(session: Session, limit: int, redo_all: bool = False) -> l
     return [row[0] for row in session.exec(stmt.limit(limit)).all()]
 
 
+def partially_pending_mention_ids(session: Session, video_id: int) -> set[int] | None:
+    """Pending instrument mentions of a video when some are already classified on the
+    current version (e.g. topics added later), else None: classify the whole video."""
+    rows = session.exec(
+        select(TopicMention.id, TopicMention.outlook_version)
+        .join(Topic, TopicMention.topic_id == Topic.id)
+        .where(TopicMention.video_id == video_id)
+        .where(Topic.slug.in_(list(INSTRUMENTS)))
+    ).all()
+    pending = {mid for mid, version in rows if version != OUTLOOK_PROMPT_VERSION}
+    if not pending or len(pending) == len(rows):
+        return None
+    return pending
+
+
 def pending_attribution_video_ids(session: Session, limit: int) -> list[int]:
     """Multi-guest channel videos with instrument mentions but no participants row yet."""
     from src.channels.models import YouTubeChannel
@@ -405,12 +443,17 @@ def run_backfill(engine, *, limit: int, workers: int = 3) -> None:
         with _state_lock:
             _state["queued"] = len(ids)
 
+        attribution = set(first)
+
         def one(video_id: int) -> None:
             with Session(engine) as session:
                 try:
                     video = session.get(Video, video_id)
                     if video is not None:
-                        classify_video(session, video)
+                        subset = None
+                        if video_id not in attribution:
+                            subset = partially_pending_mention_ids(session, video_id)
+                        classify_video(session, video, mention_ids=subset)
                     with _state_lock:
                         _state["done"] += 1
                 except Exception as exc:  # noqa: BLE001

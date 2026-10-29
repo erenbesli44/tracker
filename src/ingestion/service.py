@@ -226,7 +226,7 @@ def _prepare_transcript_for_llm(
     raw_text: str,
     *,
     transcript_segments: list[dict[str, Any]] | None = None,
-    max_chars: int = 12000,
+    max_chars: int | None = None,
 ) -> str:
     if transcript_segments:
         rendered = _render_segments_for_llm(transcript_segments)
@@ -236,12 +236,14 @@ def _prepare_transcript_for_llm(
             compact = _compact_whitespace(raw_text)
     else:
         compact = _compact_whitespace(raw_text)
+    if max_chars is None:
+        max_chars = settings.ANALYSIS_TRANSCRIPT_MAX_CHARS
     if len(compact) <= max_chars:
         return compact
 
-    head_chars = min(5000, max(1, int(max_chars * 0.42)))
-    middle_chars = min(2000, max(1, int(max_chars * 0.16)))
-    tail_chars = min(5000, max(1, max_chars - head_chars - middle_chars))
+    head_chars = max(1, int(max_chars * 0.42))
+    middle_chars = max(1, int(max_chars * 0.16))
+    tail_chars = max(1, max_chars - head_chars - middle_chars)
 
     head = compact[:head_chars].strip()
     middle_start = max(0, len(compact) // 2 - (middle_chars // 2))
@@ -586,6 +588,8 @@ def _resolve_topic_slug_from_llm(
 def _classification_from_llm_payload(
     session: Session,
     payload: dict,
+    *,
+    max_mentions: int | None = 8,
 ) -> IngestionClassificationInput | None:
     primary_topic = ""
     primary_topic_block = payload.get("primary_topic")
@@ -759,7 +763,7 @@ def _classification_from_llm_payload(
             )
         )
 
-    return IngestionClassificationInput(source="llm", topic_mentions=mentions[:5])
+    return IngestionClassificationInput(source="llm", topic_mentions=mentions[:max_mentions])
 
 
 def _auto_fill_missing_analytics_for_new_video(
