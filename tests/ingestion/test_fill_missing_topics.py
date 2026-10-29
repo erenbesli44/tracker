@@ -7,7 +7,7 @@ from src.classification.models import TopicMention
 from src.ingestion import fill_missing_topics as fill
 from src.ingestion import service
 from src.llm import service as llm_service
-from src.persons.models import Person
+from src.persons.models import Person, VideoParticipants
 from src.videos.models import Transcript, Video
 
 
@@ -139,8 +139,9 @@ async def test_fill_adds_only_missing_topics_and_classifies_only_them(
     monkeypatch.setattr(llm_service, "generate_outlook_json", fake_outlook)
 
     added = fill.fill_video(session, session.get(Video, video_id))
+    assert all(a["confidence"] == 0.8 for a in added)
     # beyond the old 5-mention cap: altin is the 7th topic
-    assert sorted(added) == sorted(
+    assert sorted(a["topic"] for a in added) == sorted(
         ["enflasyon", "jeopolitik", "petrol-enerji", "bist-turk-piyasalari", "altin"]
     )
 
@@ -275,3 +276,90 @@ def test_classification_keeps_up_to_eight_mentions(session: Session):
             session, payload, max_mentions=None
         ).topic_mentions
     ) == 9
+
+
+async def test_outlook_backfill_classifies_only_pending_mentions_of_a_filled_video(
+    client: AsyncClient, session: Session, monkeypatch
+):
+    from src.classification import outlook
+
+    video_id, topics = await _video(client, session)
+    monkeypatch.setattr(llm_service, "_is_minimax_configured", lambda: True)
+    monkeypatch.setattr(llm_service, "generate_analysis_json", _analysis)
+    # the inline outlook call leaves the new altin mention unclassified
+    monkeypatch.setattr(llm_service, "generate_outlook_json", lambda **_: {"items": []})
+    fill.fill_video(session, session.get(Video, video_id))
+    altin = session.exec(
+        select(TopicMention).where(TopicMention.topic_id == topics["altin"])
+    ).one()
+    dolar = session.exec(
+        select(TopicMention).where(TopicMention.topic_id == topics["doviz-kur"])
+    ).one()
+    altin_id, dolar_id = altin.id, dolar.id
+    before = _snapshot(session)[dolar_id]
+
+    seen = {}
+
+    def fake_outlook(**kw):
+        seen.update(kw)
+        ids = [int(x.split("]")[0]) for x in kw["items_block"].split("[mention_id=")[1:]]
+        return {"items": [{"mention_id": i, "outlook": "down", "explicit": True,
+                           "quote": "yeni alıntı"} for i in ids]}
+
+    monkeypatch.setattr(llm_service, "generate_outlook_json", fake_outlook)
+    outlook.run_backfill(session.get_bind(), limit=10, workers=1)
+    assert outlook.backfill_state()["failed"] == 0
+
+    assert f"mention_id={altin_id}" in seen["items_block"]
+    assert f"mention_id={dolar_id}" not in seen["items_block"]
+    after = _snapshot(session)
+    assert after[dolar_id] == before  # outlook, quotes, clean quote, person unchanged
+    assert after[altin_id][3:5] == ("down", True)
+
+
+async def test_subset_run_on_multi_guest_video_does_not_rewrite_participants(
+    client: AsyncClient, session: Session, monkeypatch
+):
+    video_id, topics = await _video(client, session, handle="@MeseleEkonomi")
+    atilla = session.exec(select(Person).where(Person.slug == "atilla-yesilada")).one().id
+    stored = f'[{{"person_id": {atilla}, "name": "Atilla Yeşilada", "role": "guest"}}]'
+    session.add(VideoParticipants(video_id=video_id, participants_json=stored, version="old-v1"))
+    session.commit()
+
+    monkeypatch.setattr(llm_service, "_is_minimax_configured", lambda: True)
+    monkeypatch.setattr(llm_service, "generate_analysis_json", _analysis)
+
+    def no_participants(**_):
+        raise AssertionError("subset run must use the stored participants")
+
+    monkeypatch.setattr(llm_service, "generate_participants_json", no_participants)
+
+    def fake_outlook(**kw):
+        assert "Atilla Yeşilada" in kw["speaker_name"]
+        ids = [int(x.split("]")[0]) for x in kw["items_block"].split("[mention_id=")[1:]]
+        return {"items": [{"mention_id": i, "outlook": "up", "explicit": True,
+                           "speaker": "Atilla Yeşilada"} for i in ids]}
+
+    monkeypatch.setattr(llm_service, "generate_outlook_json", fake_outlook)
+    fill.fill_video(session, session.get(Video, video_id))
+
+    session.expire_all()
+    row = session.get(VideoParticipants, video_id)
+    assert (row.participants_json, row.version) == (stored, "old-v1")
+    altin = session.exec(
+        select(TopicMention).where(TopicMention.topic_id == topics["altin"])
+    ).one()
+    assert altin.person_id == atilla
+
+
+async def test_fill_post_claims_the_slot_before_returning(client: AsyncClient, monkeypatch):
+    started = []
+    monkeypatch.setattr(fill, "run_started", lambda *a, **kw: started.append(kw))
+    try:
+        first = await client.post("/ingestions/fill-missing-topics?limit=3&dry_run=true")
+        second = await client.post("/ingestions/fill-missing-topics?limit=3&dry_run=true")
+        assert first.json()["status"] == "accepted"
+        assert second.json()["status"] == "already_running"
+        assert len(started) == 1
+    finally:
+        fill._state["running"] = False

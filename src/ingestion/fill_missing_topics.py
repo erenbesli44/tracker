@@ -71,8 +71,11 @@ def _analysis_payload(session: Session, video: Video, transcript: Transcript) ->
     )
 
 
-def fill_video(session: Session, video: Video, *, dry_run: bool = False) -> list[str]:
-    """Add mentions for topics the video lacks. Returns the slugs added (or that would be)."""
+def fill_video(session: Session, video: Video, *, dry_run: bool = False) -> list[dict]:
+    """Add mentions for topics the video lacks.
+
+    Returns [{topic, confidence}] for the mentions added (or that would be).
+    """
     transcript = session.exec(select(Transcript).where(Transcript.video_id == video.id)).first()
     if transcript is None or not transcript.raw_text.strip():
         return []
@@ -97,8 +100,9 @@ def fill_video(session: Session, video: Video, *, dry_run: bool = False) -> list
             select(Topic).where(Topic.id.in_([m.topic_id for m in items]))
         ).all()
     }
+    added = [{"topic": slugs[m.topic_id], "confidence": m.confidence} for m in items]
     if dry_run:
-        return [slugs[m.topic_id] for m in items]
+        return added
 
     mentions = classification_service.add_mentions(session, video, items)
     session.commit()
@@ -109,7 +113,7 @@ def fill_video(session: Session, video: Video, *, dry_run: bool = False) -> list
         except Exception:  # noqa: BLE001 — the outlook backfill picks unclassified mentions up
             session.rollback()
             logger.warning("Outlook failed for new mentions video_id=%s", video.id, exc_info=True)
-    return [slugs[m.topic_id] for m in mentions]
+    return added
 
 
 _lock = threading.Lock()
@@ -125,11 +129,11 @@ def fill_state() -> dict:
         }
 
 
-def run_fill(engine, *, days: int, limit: int, workers: int = 2, dry_run: bool = False) -> None:
-    """Fill missing topics for up to `limit` recent videos. Single-flight."""
+def try_start(*, days: int, dry_run: bool) -> bool:
+    """Claim the single run slot; False when a run is already going."""
     with _lock:
         if _state.get("running"):
-            return
+            return False
         _state.clear()
         _state.update(
             running=True,
@@ -144,6 +148,17 @@ def run_fill(engine, *, days: int, limit: int, workers: int = 2, dry_run: bool =
             failed=0,
             last_error=None,
         )
+    return True
+
+
+def run_fill(engine, *, days: int, limit: int, workers: int = 2, dry_run: bool = False) -> None:
+    """Fill missing topics for up to `limit` recent videos. Single-flight."""
+    if try_start(days=days, dry_run=dry_run):
+        run_started(engine, days=days, limit=limit, workers=workers, dry_run=dry_run)
+
+
+def run_started(engine, *, days: int, limit: int, workers: int, dry_run: bool) -> None:
+    """Body of a run whose slot was claimed with try_start; always releases it."""
     try:
         if not llm_service._is_minimax_configured():
             with _lock:
@@ -165,8 +180,8 @@ def run_fill(engine, *, days: int, limit: int, workers: int = 2, dry_run: bool =
                             _state["videos_with_new_topics"] += 1
                             _state["videos"][video_id] = added
                             by_topic = _state["new_mentions_by_topic"]
-                            for slug in added:
-                                by_topic[slug] = by_topic.get(slug, 0) + 1
+                            for item in added:
+                                by_topic[item["topic"]] = by_topic.get(item["topic"], 0) + 1
                 except Exception as exc:  # noqa: BLE001
                     session.rollback()
                     logger.warning("Fill missing topics failed video_id=%s", video_id,

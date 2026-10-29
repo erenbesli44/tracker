@@ -16,9 +16,9 @@ class Settings(BaseSettings):
     MINIMAX_RETRY_MAX_ATTEMPTS: int = 4
     MINIMAX_RETRY_BASE_DELAY_SECONDS: float = 1.5
     MINIMAX_RETRY_MAX_DELAY_SECONDS: float = 20.0
-    # Characters of (timestamp-rendered) transcript sent to the analysis call. 80k covers a
-    # ~60 min video whole (~25k tokens, far below MiniMax-M2's ~200k context); longer
-    # transcripts are cut to head/middle/tail at this size.
+    # Characters of (timestamp-rendered) transcript sent to the analysis call (MiniMax-M2.7).
+    # 80k sends a ~60 min video whole (~1.2k rendered chars per minute, ~25k tokens); longer
+    # transcripts are cut to head/middle/tail at this size. Tune via env.
     ANALYSIS_TRANSCRIPT_MAX_CHARS: int = 80000
     MINIMAX_SYSTEM_PROMPT: str = (
         "You are a helpful assistant that always responds with a single valid "

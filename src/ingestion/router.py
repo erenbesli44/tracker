@@ -72,11 +72,10 @@ def start_fill_missing_topics(
     workers: Annotated[int, Query(ge=1, le=4)] = 2,
     dry_run: bool = True,
 ) -> dict:
-    state = fill_missing_topics.fill_state()
-    if state.get("running"):
-        return {"status": "already_running", **state}
+    if not fill_missing_topics.try_start(days=days, dry_run=dry_run):
+        return {"status": "already_running", **fill_missing_topics.fill_state()}
     background_tasks.add_task(
-        fill_missing_topics.run_fill,
+        fill_missing_topics.run_started,
         engine,
         days=days,
         limit=limit,
