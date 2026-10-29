@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlmodel import Session
 
 from src.jobs.broker_watch import service
+from src.jobs.broker_watch.adapters import YK_RESEARCH_PAGE
 from src.jobs.broker_watch.config import load_broker_config
 from src.jobs.broker_watch.models import (
     Broker,
@@ -188,13 +189,21 @@ async def test_events_newest_first_with_exact_shape(client: AsyncClient, data: d
         "quote_page": 1,
         "recommendation": None,
         "target_price": None,
-        "document": {"url": f"{ISY_SITE}/wp-content/uploads/b.pdf", "published_at": _day(5)},
+        "document": {
+            "url": f"{ISY_SITE}/wp-content/uploads/b.pdf",
+            "page_url": f"{ISY_SITE}/post-2/",  # the post that links the PDF
+            "published_at": _day(5),
+        },
         # computed even though the earlier event is outside the days window
         "previous": {"action": "added", "event_date": _day(200)},
     }
     assert akbnk["previous"] is None
-    # no file_url: the document URL falls back to source_url
-    assert astor["document"] == {"url": "https://gedik.com/post-3/", "published_at": None}
+    # no file_url: the document URL falls back to source_url, so no separate page_url
+    assert astor["document"] == {
+        "url": "https://gedik.com/post-3/",
+        "page_url": None,
+        "published_at": None,
+    }
     assert (astor["recommendation"], astor["target_price"]) == ("AL", 41.0)
 
 
@@ -338,3 +347,76 @@ async def test_broker_routes_require_api_key(client: AsyncClient):
         for path in ("/brokers/", "/brokers/model-portfolio/events", "/brokers/x/model-portfolio"):
             response = await anon.get(path)
             assert response.status_code == 401, path
+
+
+async def test_composition_drops_items_without_ticker(
+    client: AsyncClient, session: Session, data: dict
+):
+    gedik = session.get(ModelPortfolioEvent, data["astor_added"])
+    session.add(
+        ModelPortfolioSnapshot(
+            broker_id=gedik.broker_id,
+            document_id=gedik.document_id,
+            as_of=TODAY,
+            items_json=json.dumps(
+                [
+                    {"ticker": "ASTOR", "entry_date": None},
+                    {"ticker": None, "entry_date": _day(3)},
+                    {"ticker": "", "entry_date": None},
+                    {"entry_date": _day(4)},
+                    "not-an-object",
+                ]
+            ),
+        )
+    )
+    session.commit()
+
+    body = (await client.get("/brokers/gedik-yatirim/model-portfolio")).json()
+
+    assert body["composition"]["as_of"] == TODAY.isoformat()
+    assert body["composition"]["items"] == [{"ticker": "ASTOR", "entry_date": None}]
+
+
+async def test_yapi_kredi_page_url_is_the_research_page(client: AsyncClient, session: Session):
+    """Yapı Kredi's GetFilePath PDF URL returns 400 without the research page's cookies and
+    Referer; page_url sends the reader to the research page the adapter stores as source_url."""
+    yk = Broker(
+        slug="yapi-kredi-yatirim",
+        name="Yapı Kredi Yatırım",
+        site_url="https://www.ykyatirim.com.tr",
+        adapter="yk_json",
+    )
+    session.add(yk)
+    session.commit()
+    file_url = "https://www.ykyatirim.com.tr/DetailPage/GetFilePath?url=abc"
+    document = BrokerDocument(
+        broker_id=yk.id,
+        kind="change_note",
+        source_url=YK_RESEARCH_PAGE,  # what adapters._discover_yk stores
+        file_url=file_url,
+        sha256="f" * 64,
+        published_at=TODAY,
+    )
+    session.add(document)
+    session.commit()
+    session.add(
+        ModelPortfolioEvent(
+            broker_id=yk.id,
+            document_id=document.id,
+            ticker="VAKBN",
+            action="removed",
+            event_date=TODAY,
+            reason_quote="q",
+        )
+    )
+    session.commit()
+
+    events = (
+        await client.get("/brokers/model-portfolio/events", params={"broker": "yapi-kredi-yatirim"})
+    ).json()["events"]
+
+    page_url = events[0]["document"]["page_url"]
+    assert events[0]["document"]["url"] == file_url  # contract field unchanged
+    assert urlsplit(page_url).hostname == "www.ykyatirim.com.tr"
+    assert "GetFilePath" not in page_url
+    assert page_url == "https://www.ykyatirim.com.tr/hizmetler/arastirma"

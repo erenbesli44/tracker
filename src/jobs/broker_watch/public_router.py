@@ -3,9 +3,18 @@
 Only events with ``review_status`` "auto" or "reviewed" are served (plan criterion D).
 Compositions are served as tickers + entry dates only, without targets or weights
 (plan §7 decision 2, criterion C). Document text is never served.
+
+``document.url`` is the PDF (``file_url``) or, for an HTML document, ``source_url``.
+``document.page_url`` is the broker page that lists the document (``source_url``) when it
+differs from ``url``, else null. Yapı Kredi's ``GetFilePath`` PDF URL needs the research
+page's cookies and Referer, so a reader should be sent to ``page_url`` (its research page).
+
+``days=N`` on the events list means ``event_date >= today_utc - N``, i.e. N + 1 calendar
+days including today.
 """
 
 import json
+import logging
 from datetime import date, timedelta
 from typing import Annotated
 
@@ -24,6 +33,7 @@ from src.jobs.broker_watch.models import (
 from src.models import utc_now
 
 router = APIRouter(prefix="/brokers", tags=["brokers"])
+logger = logging.getLogger(__name__)
 
 SERVED_STATUSES = ("auto", "reviewed")
 BROKER_EVENTS_LIMIT = 10
@@ -84,6 +94,7 @@ def _serialize_event(
     document: BrokerDocument,
     history: list[ModelPortfolioEvent],
 ) -> dict:
+    url = document.file_url or document.source_url
     return {
         "id": event.id,
         "broker": {"slug": broker.slug, "name": broker.name},
@@ -95,7 +106,8 @@ def _serialize_event(
         "recommendation": event.recommendation,
         "target_price": event.target_price,
         "document": {
-            "url": document.file_url or document.source_url,
+            "url": url,
+            "page_url": document.source_url if document.source_url != url else None,
             "published_at": document.published_at,
         },
         "previous": _previous(event, history),
@@ -134,11 +146,13 @@ def _serialize_composition(snapshot: ModelPortfolioSnapshot | None) -> dict | No
         raw = json.loads(snapshot.items_json)
     except json.JSONDecodeError:
         raw = []
-    items = [
-        {"ticker": item.get("ticker"), "entry_date": item.get("entry_date")}
-        for item in raw
-        if isinstance(item, dict)
-    ]
+    items = []
+    for item in raw:
+        ticker = item.get("ticker") if isinstance(item, dict) else None
+        if not ticker:  # a malformed item must not break the whole broker page
+            logger.debug("Snapshot %s: skipping item without ticker: %r", snapshot.id, item)
+            continue
+        items.append({"ticker": ticker, "entry_date": item.get("entry_date")})
     return {"as_of": snapshot.as_of, "basis": snapshot.basis, "items": items}
 
 
@@ -180,6 +194,7 @@ def list_events(
     broker: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> dict:
+    """``days=N``: events with event_date >= today (UTC) - N, i.e. N + 1 calendar days."""
     broker_id = _get_broker(session, broker).id if broker else None
     since = utc_now().date() - timedelta(days=days)
     events = _list_events(session, limit=limit, broker_id=broker_id, since=since)
