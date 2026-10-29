@@ -1,0 +1,29 @@
+README.md
+  s_2998d96b5bdfc2::t_83b3552d752a00 1-27
+src/classification/outlook.py
+  s_2998d96b5bdfc2::t_a52a33ed3ec61f 14,194-202,344-358,446-447,453-456
+src/config.py
+  s_2998d96b5bdfc2::t_f9670f0e2d4a39 19-21
+src/ingestion/fill_missing_topics.py
+  s_2998d96b5bdfc2::t_ba614808326fd7 74-78,103,105,116,132-133,136,151-161,183-184
+src/ingestion/router.py
+  s_2998d96b5bdfc2::t_8af13ef6f4cbc1 75-76,78
+tests/ingestion/test_fill_missing_topics.py
+  s_2998d96b5bdfc2::t_8599befc367b99 10,142,144,279-365
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7b446416c819231143261cebf2d1b37706ca4075",
+  "prompts": {},
+  "sessions": {
+    "s_2998d96b5bdfc2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "565a1a1b-5fe0-475d-9755-116ecd8ac8c4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
