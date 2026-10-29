@@ -1,0 +1,21 @@
+src/jobs/README.md
+  s_290f58b1cdeb7f::t_9df4be11ae6196 8
+tests/broker_watch/test_router.py
+  s_290f58b1cdeb7f::t_79d20184528098 1,116-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d6d817ddece68c8e6f8b328e2ae7d4ccdacd1d18",
+  "prompts": {},
+  "sessions": {
+    "s_290f58b1cdeb7f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_290f58b1cdeb7f",
+        "model": "unknown"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
