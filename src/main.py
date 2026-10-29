@@ -71,6 +71,7 @@ from src.ingestion.router import router as ingestion_router  # noqa: E402
 from src.jobs.youtube_watch.router import router as youtube_watch_router  # noqa: E402
 from src.jobs.twitter_post.router import router as twitter_post_router  # noqa: E402
 from src.jobs.broker_watch.router import router as broker_watch_router  # noqa: E402
+from src.jobs.broker_watch.public_router import router as brokers_router  # noqa: E402
 from src.market_inference.router import router as market_inference_router  # noqa: E402
 
 _protected = [Depends(require_api_key)]
@@ -86,6 +87,7 @@ app.include_router(ingestion_router, dependencies=_protected)
 app.include_router(youtube_watch_router, dependencies=_protected)
 app.include_router(twitter_post_router, dependencies=_protected)
 app.include_router(broker_watch_router, dependencies=_protected)
+app.include_router(brokers_router, dependencies=_protected)
 app.include_router(market_inference_router, dependencies=_protected)
 
 
