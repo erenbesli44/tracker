@@ -346,7 +346,7 @@ def test_consistency_check_ignores_same_day_current_snapshot(session: Session):
     assert service.check_snapshot_consistency(session, broker.id) == 1
 
 
-def _note(session, broker, day, name) -> BrokerDocument:
+def _note(session, broker, day, name, parse_status="needs_review") -> BrokerDocument:
     note = BrokerDocument(
         broker_id=broker.id,
         kind=CHANGE_NOTE,
@@ -354,6 +354,7 @@ def _note(session, broker, day, name) -> BrokerDocument:
         sha256=sha256_hex(name.encode("utf-8")),
         text="metin",
         published_at=day,
+        parse_status=parse_status,
     )
     session.add(note)
     session.commit()
@@ -391,6 +392,28 @@ def test_consistency_check_leaves_superseded_event_to_the_later_one(session: Ses
     for row in (added, removed):
         session.refresh(row)
     assert (added.review_status, removed.review_status) == ("auto", "auto")
+
+
+def test_consistency_check_ignores_a_rejected_later_event(session: Session):
+    broker, document = _seed(session)
+    _event(session, broker, document, "KCAER", "added", date(2026, 5, 5))
+    rejected = _event(session, broker, document, "KCAER", "removed", date(2026, 6, 1))
+    rejected.review_status = "rejected"
+    session.add(rejected)
+    session.commit()
+    _snapshot(session, broker, document, date(2026, 10, 29), ["ASTOR"])  # no KCAER
+
+    assert service.check_snapshot_consistency(session, broker.id) == 1
+
+
+def test_consistency_check_counts_a_read_note_without_new_events_as_read(session: Session):
+    # A re-issued note whose events were all duplicates is stored as parsed with no events.
+    broker, document = _seed(session)
+    _event(session, broker, document, "KCAER", "added", date(2026, 5, 5))
+    _note(session, broker, date(2026, 6, 1), "reissue", parse_status="parsed")
+    _snapshot(session, broker, document, date(2026, 10, 29), ["ASTOR"])  # no KCAER
+
+    assert service.check_snapshot_consistency(session, broker.id) == 1
 
 
 def test_consistency_check_ignores_unread_notes_outside_the_window(session: Session):

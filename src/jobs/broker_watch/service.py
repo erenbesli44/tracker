@@ -438,10 +438,16 @@ def _store_document(
 
 def _changed_before(session: Session, event: ModelPortfolioEvent, until: date) -> bool:
     """True when the broker may have changed ``event.ticker`` after the event and on or
-    before ``until``: a later added/removed event for the same ticker (that one is checked
-    against the snapshot itself), or a change note dated in between that yielded no event
-    at all, so its changes are unknown (Gedik's prose and chart notes; Gedik's composition
-    page carries no date, so its snapshot is dated on the fetch day, months later).
+    before ``until``, so the snapshot says nothing about this event:
+
+    - a later added/removed event for the same ticker that a reviewer has not rejected
+      (an ``auto`` one is checked against snapshots on its own; a ``needs_review`` one is
+      already in the review queue);
+    - or a change note dated in that window that was not read (``needs_review`` or
+      ``failed`` with no events at all), e.g. Gedik's prose and chart notes. Gedik's
+      composition page carries no date, so its snapshot is dated on the fetch day.
+
+    Notes without ``published_at`` are ignored: they cannot be placed in the window.
     """
     later_event = session.exec(
         select(ModelPortfolioEvent.id).where(
@@ -450,6 +456,7 @@ def _changed_before(session: Session, event: ModelPortfolioEvent, until: date) -
             ModelPortfolioEvent.action.in_((parsers.ADDED, parsers.REMOVED)),
             ModelPortfolioEvent.event_date > event.event_date,
             ModelPortfolioEvent.event_date <= until,
+            ModelPortfolioEvent.review_status != "rejected",
         )
     ).first()
     if later_event is not None:
@@ -465,6 +472,7 @@ def _changed_before(session: Session, event: ModelPortfolioEvent, until: date) -
             BrokerDocument.kind == CHANGE_NOTE,
             BrokerDocument.published_at > event.event_date,
             BrokerDocument.published_at <= until,
+            BrokerDocument.parse_status != "parsed",  # a read note whose events were all duplicates
             ~has_events,
         )
     ).first()
@@ -507,7 +515,14 @@ def check_snapshot_consistency(session: Session, broker_id: int) -> int:
             )
             .order_by(ModelPortfolioSnapshot.as_of, ModelPortfolioSnapshot.id)
         ).first()
-        if snapshot is None or _changed_before(session, event, snapshot.as_of):
+        if snapshot is None:
+            continue
+        if _changed_before(session, event, snapshot.as_of):
+            logger.info(
+                "Consistency check skipped for event %d (%s %s %s): the broker may have "
+                "changed it before the snapshot of %s",
+                event.id, event.ticker, event.action, event.event_date, snapshot.as_of,
+            )
             continue
         listed = event.ticker in {item["ticker"] for item in json.loads(snapshot.items_json)}
         expected = event.action == parsers.ADDED
