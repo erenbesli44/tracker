@@ -553,25 +553,16 @@ ADIM 2 — KİMİN GÖRÜŞÜ? own_view=true yalnızca konuşmacı beklentiyi KE
    - Piyasanın ne fiyatladığını veya yatırımcıların ruh hâlini anlatmak.
    own_view=false ise explicit=false.
 
-ADIM 3 — KOŞUL TESTİ. Seçtiğin quote cümlesine sırayla uygula:
-   3a. SÜREKLİLİK = ANA SENARYO (önce bunu kontrol et). Cümlede konuşmacının KENDİ ileriye dönük
-       beklentisi varsa ("bekliyorum", "tahmin ediyorum", "düşünüyorum", "-ecek/-acak", "yön
-       yukarı/aşağı") ve koşul bugünkü durumun SÜRMESİNİ anlatıyorsa ("-dığı sürece",
-       "-madıkça/-medikçe", "kaldıkça", "böyle giderse", "bu hızla giderse", "özel bir durum
-       olmazsa") bu bir koşul DEĞİLDİR, ana senaryodur → explicit=true. Örnekler:
-       - "Faizler yüksek kaldığı sürece hisselerde zayıflığın süreceğini düşünüyorum" → down,
-         explicit=true
-       - "Yeni bir kriz çıkmadıkça altının yükselişini sürdüreceğini tahmin ediyorum" → up,
-         explicit=true
-       - "Endeks 9.800 üzerinde kaldıkça yön yukarı" → up, explicit=true
-       - "Bu tempoyla giderse kur yılı 55 lira civarında kapatacak" → up, explicit=true
-       - Uyarı biçimi de ana senaryodur: "... görürseniz şaşırmayın".
-   3b. TETİK = KOŞUL. Yön, "-sa/-se" ile YENİ bir olaya, başka bir değişkene veya bir seviyenin
-       kırılmasına / aşılmasına bağlanıyorsa konuşmacının ana beklentisi değildir → explicit=false
-       (yön yazılabilir): "direnci aşarsa / üstüne atabilirse yükseliş gelebilir", "desteği kırarsa
-       düşebilir", "eğer savaş çıkarsa petrol fırlar", "petrol yükselmeye devam ederse borsa
-       satılır", "ancak ... olursa toparlanır". Konuşmacı koşulun gerçekleşeceğini AYRICA
-       söylüyorsa explicit=true.
+ADIM 3 — KOŞUL TESTİ. Seçtiğin quote cümlesindeki beklenti bir "-sa/-se" koşuluna bağlı mı
+("eğer ... olursa", "kırarsa", "aşarsa", "devam ederse", "gelirse", "ancak ... ile olur")?
+   Bağlıysa ve konuşmacı koşulun gerçekleşeceğini AYRICA söylemiyorsa → explicit=false (yön
+   yazılabilir).
+   Koşul SAYILMAZ, ana senaryodur:
+   - Seviye korunduğu sürece verilen teknik senaryo: "... üzerinde kaldıkça / kaldığı sürece
+     yükseliş bekliyorum".
+   - Varsayılan senaryo: "büyük bir sürpriz olmadıkça", "mevcut gidişat sürerse", "böyle giderse"
+     ile söylenen beklenti.
+   - Uyarı biçimi: "... görürseniz şaşırmayın".
 
 ADIM 4 — YÖN ve KESİNLİK (sadece time="future" ve own_view=true ise):
 1. Aracın FİYAT YÖNÜ sorulur, ekonominin genel durumu değil.
