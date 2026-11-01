@@ -409,6 +409,13 @@ def main() -> None:
 
     s3, s4 = score(rows, "v3"), score(rows, "v4")
     caption_rows = [r for r in rows if r["excerpt_mode"] != "proportional"]
+    # Noise-adjusted keep: only the keep rows the baseline rerun itself still reproduces.
+    stable = [
+        r for r in rows
+        if r["label"] == "keep" and r["v3"] and r["v3"]["outlook_explicit"]
+        and r["v3"]["outlook"] == r["current"]
+    ]
+    n4 = score(stable, "v4")["keep"]
     c3, c4 = score(caption_rows, "v3"), score(caption_rows, "v4")
     modes = Counter(mode for _, mode in built.values())
     lines = [
@@ -427,6 +434,8 @@ def main() -> None:
         f"| {pct(s3['none_other'])} | {pct(s4['none_other'])} |",
         f"| keep still explicit, same direction | >= 85% | {s3['keep'][1]}/{s3['keep'][1]} "
         f"| {pct(s3['keep'])} | {pct(s4['keep'])} |",
+        f"| keep, rows the v3 rerun reproduces (noise-adjusted) | | | {len(stable)}/{len(stable)} "
+        f"| {pct(n4)} |",
         f"| (none_current_state explicit on a different sentence) | | | "
         f"{pct(s3['none_current_state_requoted'])} | {pct(s4['none_current_state_requoted'])} |",
         f"| (none_other explicit on a different sentence) | | | "
