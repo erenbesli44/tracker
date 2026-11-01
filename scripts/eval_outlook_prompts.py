@@ -9,7 +9,8 @@ Labels (JSON list): {"instrument", "video_id", "current", "quote", "label"} wher
 ``keep`` (a real forward view in direction ``current``), ``none_current_state`` or ``none_other``.
 
 Usage (no secret is printed):
-    set -a; source ../doviz/v1/finance-api/.env; set +a        # TRACKER_API_KEY
+    set -a; source ../doviz/v1/finance-api/.env; set +a   # TRACKER_API_KEY
+    export TRACKER_API_URL=<tracker API base URL>
     uv run --frozen python scripts/eval_outlook_prompts.py \\
         --labels labels.json --out eval.md --cache-dir /tmp/eval-cache \\
         --minimax-env ../tracker/.env --baseline-ref 0c6e6f1
@@ -47,7 +48,6 @@ SITE_TO_SLUG = {
     "gumus": "gumus",
     "petrol-enerji": "petrol-enerji",
 }
-DEFAULT_BASE_URL = "http://t122yraee5v724x7tonr3d6g.204.168.192.245.sslip.io"
 
 
 def load_env(path: Path, prefixes: tuple[str, ...]) -> None:
@@ -337,7 +337,6 @@ def main() -> None:
     ap.add_argument("--cache-dir", type=Path, required=True)
     ap.add_argument("--minimax-env", type=Path, required=True)
     ap.add_argument("--baseline-ref", default="0c6e6f1")
-    ap.add_argument("--base-url", default=DEFAULT_BASE_URL)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--tag", default="v4", help="label for the current prompt in the report")
     ap.add_argument("--youtube-proxy", action="store_true",
@@ -350,13 +349,14 @@ def main() -> None:
     from src.llm.prompts import OUTLOOK_PROMPT_TEMPLATE, OUTLOOK_PROMPT_VERSION
 
     api_key = os.environ.get("TRACKER_API_KEY")
-    if not api_key:
-        raise SystemExit("TRACKER_API_KEY is not set")
+    base_url = os.environ.get("TRACKER_API_URL")
+    if not api_key or not base_url:
+        raise SystemExit("TRACKER_API_KEY and TRACKER_API_URL must be set")
     labels = [r for r in json.loads(args.labels.read_text()) if r.get("quote")]
     cache = Cache(args.cache_dir)
     baseline = template_at_ref(args.baseline_ref)
 
-    with httpx.Client(base_url=args.base_url, headers={"X-API-Key": api_key}, timeout=60) as c:
+    with httpx.Client(base_url=base_url, headers={"X-API-Key": api_key}, timeout=60) as c:
         slugs = {t["id"]: t["slug"] for t in c.get("/topics/").raise_for_status().json()}
         video_ids = sorted({r["video_id"] for r in labels})
         videos = {vid: fetch_video(c, cache, vid) for vid in video_ids}
