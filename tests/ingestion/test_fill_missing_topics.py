@@ -7,6 +7,7 @@ from src.classification.models import TopicMention
 from src.ingestion import fill_missing_topics as fill
 from src.ingestion import service
 from src.llm import service as llm_service
+from src.llm.prompts import OUTLOOK_PROMPT_VERSION
 from src.persons.models import Person, VideoParticipants
 from src.videos.models import Transcript, Video
 
@@ -86,7 +87,8 @@ async def _video(
     dolar = session.exec(
         select(TopicMention).where(TopicMention.topic_id == topics["doviz-kur"])
     ).one()
-    dolar.outlook, dolar.outlook_explicit, dolar.outlook_version = "up", True, "outlook-v3"
+    dolar.outlook, dolar.outlook_explicit = "up", True
+    dolar.outlook_version = OUTLOOK_PROMPT_VERSION
     dolar.outlook_quote = dolar.outlook_quote_clean = "kur yükselir"
     session.add(dolar)
     session.commit()
@@ -134,7 +136,8 @@ async def test_fill_adds_only_missing_topics_and_classifies_only_them(
             select(TopicMention).where(TopicMention.topic_id == topics["altin"])
         ).one()
         return {"items": [{"mention_id": altin.id, "outlook": "down", "explicit": True,
-                           "quote": "altın 3500'e geriler"}]}
+                           "quote": "altın 3500'e geriler", "time": "future",
+                           "own_view": True}]}
 
     monkeypatch.setattr(llm_service, "generate_outlook_json", fake_outlook)
 
@@ -304,7 +307,8 @@ async def test_outlook_backfill_classifies_only_pending_mentions_of_a_filled_vid
         seen.update(kw)
         ids = [int(x.split("]")[0]) for x in kw["items_block"].split("[mention_id=")[1:]]
         return {"items": [{"mention_id": i, "outlook": "down", "explicit": True,
-                           "quote": "yeni alıntı"} for i in ids]}
+                           "quote": "yeni alıntı", "time": "future", "own_view": True}
+                          for i in ids]}
 
     monkeypatch.setattr(llm_service, "generate_outlook_json", fake_outlook)
     outlook.run_backfill(session.get_bind(), limit=10, workers=1)

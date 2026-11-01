@@ -47,6 +47,7 @@ INSTRUMENTS: dict[str, str] = {
 }
 
 _VALID = {"up", "down", "flat", "none"}
+_TIMES = {"future", "present", "past"}
 _WINDOW_PAD_SECONDS = 45
 _EXCERPT_MAX_CHARS = 3500
 _QUOTE_MAX_CHARS = 240
@@ -105,12 +106,22 @@ def build_items_block(rows: list[tuple[TopicMention, str, str]]) -> str:
     return "\n\n".join(blocks)
 
 
-def parse_outlook_items(payload: dict[str, Any], mention_ids: set[int]) -> dict[int, dict]:
-    """Validate the model output; anything malformed is dropped (stays unclassified)."""
+def parse_outlook_items(
+    payload: dict[str, Any], mention_ids: set[int], stats: dict[str, int] | None = None
+) -> dict[int, dict]:
+    """Validate the model output; anything malformed is dropped (stays unclassified).
+
+    Guard against the model calling a description of the current or past price a view:
+    a direction is kept only when the statement is about the future (``time``), and it is
+    explicit only when it is also the speaker's own view with a supporting quote. Missing
+    or invalid ``time`` / ``own_view`` count as "no" (a wrong arrow is the worst failure);
+    such items are logged once per payload and counted in ``stats["missing_contract"]``.
+    """
     out: dict[int, dict] = {}
     items = payload.get("items")
     if not isinstance(items, list):
         return out
+    missing: list[int] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -120,16 +131,35 @@ def parse_outlook_items(payload: dict[str, Any], mention_ids: set[int]) -> dict[
             continue
         if mid not in mention_ids:
             continue
+        if str(item.get("time", "")).strip().lower() not in _TIMES or not isinstance(
+            item.get("own_view"), bool
+        ):
+            missing.append(mid)
         outlook = str(item.get("outlook", "")).strip().lower()
         if outlook not in _VALID:
             continue
-        explicit = item.get("explicit") is True and outlook != "none"
+        if str(item.get("time", "")).strip().lower() != "future":
+            outlook = "none"  # current/past state is not a view
+        quote = str(item.get("quote") or "").strip()[:_QUOTE_MAX_CHARS] or None
+        explicit = (
+            item.get("explicit") is True
+            and outlook != "none"
+            and item.get("own_view") is True
+            and quote is not None
+        )
         out[mid] = {
             "outlook": outlook,
             "outlook_explicit": explicit,
             "outlook_horizon": (str(item.get("horizon") or "").strip()[:80] or None),
-            "outlook_quote": (str(item.get("quote") or "").strip()[:_QUOTE_MAX_CHARS] or None),
+            "outlook_quote": quote,
         }
+    if missing:
+        logger.warning(
+            "Outlook payload missing time/own_view for %d item(s): mention_ids=%s",
+            len(missing), sorted(missing),
+        )
+        if stats is not None:
+            stats["missing_contract"] = stats.get("missing_contract", 0) + len(missing)
     return out
 
 
@@ -139,6 +169,7 @@ def classify_video(
     *,
     dry_run: bool = False,
     mention_ids: set[int] | None = None,
+    stats: dict[str, int] | None = None,
 ) -> dict[int, dict]:
     """Classify the tracked-instrument mentions of one video. Returns {mention_id: fields}.
 
@@ -208,7 +239,7 @@ def classify_video(
         published_at=video.published_at.isoformat() if video.published_at else "",
         items_block=build_items_block(items),
     )
-    results = parse_outlook_items(payload, {m.id for m, _ in rows})
+    results = parse_outlook_items(payload, {m.id for m, _ in rows}, stats)
     add_clean_quotes(results, items)
     speakers = parse_speakers(payload, {m.id for m, _ in rows})
     if participants is not None:
@@ -431,6 +462,7 @@ def run_backfill(engine, *, limit: int, workers: int = 3) -> None:
             queued=0,
             done=0,
             failed=0,
+            missing_contract=0,
             last_error=None,
         )
     try:
@@ -453,7 +485,10 @@ def run_backfill(engine, *, limit: int, workers: int = 3) -> None:
                         subset = None
                         if video_id not in attribution:
                             subset = partially_pending_mention_ids(session, video_id)
-                        classify_video(session, video, mention_ids=subset)
+                        stats: dict[str, int] = {}
+                        classify_video(session, video, mention_ids=subset, stats=stats)
+                        with _state_lock:
+                            _state["missing_contract"] += stats.get("missing_contract", 0)
                     with _state_lock:
                         _state["done"] += 1
                 except Exception as exc:  # noqa: BLE001
