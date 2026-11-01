@@ -1,0 +1,29 @@
+README.md
+  s_4b1d682363bdcd::t_5a0cb1ad61c072 28-54
+src/config.py
+  s_4b1d682363bdcd::t_b460b0440b6ac3 27-37
+src/jobs/youtube_watch/router.py
+  s_4b1d682363bdcd::t_e8f2445b6c4142 16,302
+src/llm/service.py
+  s_4b1d682363bdcd::t_21d63649937715 5,7,41-53,58-117,256,263,273-286,288-290,292-294,296-301,321-338,379,384,409,434,459,497,544,594,600,620
+tests/llm/test_usage_and_effort.py
+  s_4b1d682363bdcd::t_1182f2257275a4 1-162
+tests/market_inference/test_inference_sources.py
+  s_4b1d682363bdcd::t_af4e13f17c1feb 197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6f29b3c5db09950338dae1f13b851fcbfcbdae94",
+  "prompts": {},
+  "sessions": {
+    "s_4b1d682363bdcd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cfd21591-6f83-463b-8b53-4b445909cec8",
+        "model": "unknown"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
