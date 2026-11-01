@@ -24,6 +24,17 @@ class Settings(BaseSettings):
         "You are a helpful assistant that always responds with a single valid "
         "JSON object and no surrounding prose."
     )
+    # reasoning_effort per call type (MiniMax-M3.1-Flash: low|medium|high|xhigh|max). The model
+    # uses max when the field is omitted, which spends ~85-90 % of a call on reasoning tokens
+    # (measured 2026-11-01). Empty = omit the field. Outlook stays on the model default until the
+    # labelled eval (scripts/eval_outlook_prompts.py) clears a lower level: a wrong arrow under a
+    # real name is the worst failure. "low" is never used: it dropped 40 % of key levels.
+    MINIMAX_EFFORT_ANALYSIS: str = "medium"
+    MINIMAX_EFFORT_OUTLOOK: str = ""
+    MINIMAX_EFFORT_QUOTE_CLEAN: str = "medium"
+    MINIMAX_EFFORT_PARTICIPANTS: str = "medium"
+    MINIMAX_EFFORT_INFERENCE: str = "medium"
+    MINIMAX_EFFORT_DEFAULT: str = "medium"  # legacy summary / classification / thesis prompts
     YOUTUBE_PROXY_ENABLED: bool = False
     YOUTUBE_PROXY_MODE: str = "direct"  # direct | rotating
     YOUTUBE_PROXY_RETRIES: int = 3
