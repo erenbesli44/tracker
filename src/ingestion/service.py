@@ -209,16 +209,38 @@ def _format_timecode(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def _render_segments_for_llm(segments: list[dict[str, Any]]) -> str:
+def _render_segments_for_llm(
+    segments: list[dict[str, Any]], every_seconds: int | None = None
+) -> str:
+    """Transcript text with time markers for the analysis prompt.
+
+    ``every_seconds <= 0`` (default ``ANALYSIS_TIMESTAMP_EVERY_SECONDS``): one line per caption
+    segment, ``[MM:SS-MM:SS] text``. ``> 0``: one line per block, ``[MM:SS] text text …``, with a
+    marker on the first segment and on the first segment at or past each boundary. The sparse
+    form costs 46 % fewer transcript tokens but is opt-in (see the setting).
+    """
+    if every_seconds is None:
+        every_seconds = settings.ANALYSIS_TIMESTAMP_EVERY_SECONDS
     lines: list[str] = []
+    block: list[str] = []
+    next_marker_at: float | None = None
     for segment in segments:
         text = _compact_whitespace(_safe_str(segment.get("text")))
         if not text:
             continue
         start = max(0.0, _safe_unbounded_float(segment.get("start"), 0.0))
-        duration = max(0.0, _safe_unbounded_float(segment.get("duration"), 0.0))
-        end = start + duration
-        lines.append(f"[{_format_timecode(start)}-{_format_timecode(end)}] {text}")
+        if every_seconds <= 0:
+            end = start + max(0.0, _safe_unbounded_float(segment.get("duration"), 0.0))
+            lines.append(f"[{_format_timecode(start)}-{_format_timecode(end)}] {text}")
+            continue
+        if next_marker_at is None or start >= next_marker_at:
+            if block:
+                lines.append(" ".join(block))
+            block = [f"[{_format_timecode(start)}]"]
+            next_marker_at = (start // every_seconds + 1) * every_seconds
+        block.append(text)
+    if block:
+        lines.append(" ".join(block))
     return "\n".join(lines).strip()
 
 

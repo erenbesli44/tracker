@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     # 80k sends a ~60 min video whole (~1.2k rendered chars per minute, ~25k tokens); longer
     # transcripts are cut to head/middle/tail at this size. Tune via env.
     ANALYSIS_TRANSCRIPT_MAX_CHARS: int = 80000
+    # > 0: one [MM:SS] marker per that many seconds instead of [MM:SS-MM:SS] on every ~5 s caption
+    # segment (-46 % transcript tokens, 22-min video 14.8k -> 10.0k prompt tokens). Opt-in: on
+    # 2026-11-01, at medium effort, the sparse form dropped 1-2 borderline topics in 3/3 runs
+    # while the per-segment form kept all 8 in 3/3 (one video; see README). Enable after a
+    # wider eval. <= 0 keeps the per-segment markers.
+    ANALYSIS_TIMESTAMP_EVERY_SECONDS: int = 0
     MINIMAX_SYSTEM_PROMPT: str = (
         "You are a helpful assistant that always responds with a single valid "
         "JSON object and no surrounding prose."

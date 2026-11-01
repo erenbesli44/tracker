@@ -106,6 +106,40 @@ def test_prepare_transcript_for_llm_uses_timestamped_segments():
     assert "Plain fallback transcript text" not in formatted
 
 
+def _segs(starts: list[float]) -> list[dict]:
+    return [{"start": s, "duration": 5.0, "text": f"t{int(s)}"} for s in starts]
+
+
+def test_render_segments_marks_every_segment_by_default():
+    out = service._render_segments_for_llm(_segs([0, 5, 10]))
+    assert out == "[00:00-00:05] t0\n[00:05-00:10] t5\n[00:10-00:15] t10"
+
+
+def test_render_segments_sparse_marks_the_first_segment_and_each_boundary():
+    out = service._render_segments_for_llm(_segs([0, 5, 10, 25, 31, 45, 60, 62]), every_seconds=30)
+    assert out.splitlines() == ["[00:00] t0 t5 t10 t25", "[00:31] t31 t45", "[01:00] t60 t62"]
+
+
+def test_render_segments_sparse_uses_hhmmss_past_one_hour():
+    out = service._render_segments_for_llm(_segs([3599, 3605]), every_seconds=30)
+    assert out == "[59:59] t3599\n[01:00:05] t3605"
+
+
+def test_render_segments_interval_comes_from_settings(monkeypatch):
+    monkeypatch.setattr(service.settings, "ANALYSIS_TIMESTAMP_EVERY_SECONDS", 10)
+    out = service._render_segments_for_llm(_segs([0, 5, 10, 15, 20]))
+    assert out == "[00:00] t0 t5\n[00:10] t10 t15\n[00:20] t20"
+
+
+def test_render_segments_skips_empty_text_in_both_forms():
+    segments = [
+        {"start": 0.0, "duration": 5.0, "text": "  "},
+        {"start": 5.0, "duration": 5.0, "text": "a"},
+    ]
+    assert service._render_segments_for_llm(segments) == "[00:05-00:10] a"
+    assert service._render_segments_for_llm(segments, every_seconds=30) == "[00:05] a"
+
+
 def test_build_llm_metadata_normalizes_channel_topic_context():
     data = IngestionYoutubeRequest(video={"video_url": "https://www.youtube.com/watch?v=bnk8WqphWMw"})
     channel = SimpleNamespace(

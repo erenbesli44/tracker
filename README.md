@@ -52,3 +52,18 @@ Values: `low`, `medium`, `high`, `xhigh`, `max`, or empty. Do not use `low`: it 
 key levels and let a typo into a cleaned quote. An invalid value is logged and ignored. If the
 configured model rejects the field (HTTP 400 mentioning reasoning effort), the call is resent
 once without it and a warning is logged.
+
+### Transcript time markers (sparse form is opt-in)
+
+The analysis prompt gets the transcript with time markers. Default (`ANALYSIS_TIMESTAMP_EVERY_SECONDS=0`):
+one line per caption segment, `[MM:SS-MM:SS] text`. With a positive value: one line per block,
+`[MM:SS] text …`, one marker per that many seconds. On a 22-min video (518 segments) the sparse
+form at 30 s has 46 % fewer transcript tokens (MiniMax prompt 14.8k → 10.0k) and the call ran in
+~30 s instead of ~45 s.
+
+It is **not** the default because recall of borderline topics looked worse on the one video
+measured (2026-11-01, `reasoning_effort=medium`, 3 runs per form): per-segment markers found
+8/8/8 subtopics (key levels 78/89/77); sparse 30 s found 7/7/6 (86/67/72) and missed the
+Dolar/TL topic twice; a start-only marker on every segment found 6/8/8 (77/77/82). The saving is
+about $0.0007 per video, so the default stays until a wider eval (≥ 20 videos, both forms, same
+effort) shows the same topic sets.
