@@ -506,9 +506,11 @@ MARKET_INFERENCE_AGENDA_RULES = """\
 # so the rules favour "none" whenever the speaker does not commit.
 # ---------------------------------------------------------------------------
 
-OUTLOOK_PROMPT_VERSION = "outlook-v3"
+OUTLOOK_PROMPT_VERSION = "outlook-v4"
 
-OUTLOOK_PROMPT_TEMPLATE = """Sen bir finans içerik analistisin. Görevin: bir YouTube videosunda KONUŞMACININ, verilen her finansal araç için GELECEKTE FİYATIN hangi yöne gideceğini bekleyip beklemediğini tespit etmek.
+OUTLOOK_PROMPT_TEMPLATE = """Sen bir finans içerik analistisin. Görevin: bir YouTube videosunda
+KONUŞMACININ, verilen her finansal araç için GELECEKTE FİYATIN hangi yöne gideceğine dair KENDİ
+beklentisini söyleyip söylemediğini tespit etmek.
 
 Video: {{video_title}}
 Kanal / konuşmacı: {{speaker_name}}
@@ -518,48 +520,165 @@ Her madde için bir finansal araç, o bölümün özeti ve transkriptten ilgili 
 
 {{items}}
 
-KARAR KURALLARI (sırayla uygula):
-1. Sadece İLERİYE DÖNÜK beklenti sayılır. Geçmiş veya bugünkü fiyat hareketini aktarmak beklenti DEĞİLDİR.
-   "Endeks bugün %1 düştü", "altın rekor kırdı", "dolar 49 liraya geldi" → outlook="none".
-2. Aracın FİYAT YÖNÜ sorulur, ekonominin genel durumu değil.
+Bu sonuç sitede "X kişisi Y için yükseliş/düşüş bekliyor" diye gerçek bir isimle gösterilir. Bugünkü
+durumu, geçmişi veya başkasının görüşünü konuşmacının beklentisi diye yazmak en kötü hatadır.
+
+ADIM 1 — ZAMAN TESTİ (önce bunu yap). Konuşmacının bu aracın FİYATI hakkındaki cümlesi hangi zamanı
+anlatıyor?
+   time="future"  : fiyatın bundan SONRA ne yapacağını söylüyor. Gelecek zaman ve beklenti kipleri:
+                    "yükselecek", "düşecek", "devam edecek", "sürecek", "baskı altında kalmaya devam
+                    edecek", "görebiliriz", "gelebilir", "hedefim", "bekliyorum", "bekliyoruz",
+                    "alım fırsatı", "uzak durun".
+   time="present" : fiyatın ŞU AN ne yaptığını / ne durumda olduğunu anlatıyor. Şimdiki zaman
+                    ("-iyor", "-mekte") ve durum cümleleri ileriye dönük beklenti DEĞİLDİR, "devam
+                    ediyor" dense bile:
+      "üzerinde baskı var", "baskı altında", "baskı devam ediyor", "baskılanıyor", "satıcılı
+      seyrediyor", "alıcılı", "trend devam ediyor", "ralli sürüyor", "satışlar sürüyor", "momentum
+      aşağı", "yatay seyrediyor", "dar bantta", "bugün yatay", "toparlanmaya çalışıyor", "değer
+      kazanıyor / kaybediyor".
+   time="past"    : olmuş hareketi anlatıyor: "düştü", "yükseldi", "geldi", "rekor kırdı", "olumsuz
+                    etkiledi", "baskı yarattı".
+   "bekliyorum", "düşünüyorum", "öngörüyorum", "tahmin ediyorum" şimdiki zamanda çekimlense de
+   geleceğe dair beklenti bildirir → time="future".
+   Bir cümle hem durumu hem geleceği içeriyorsa yalnızca gelecek kısmı sayılır; gelecek kısmı yoksa
+   time="present".
+   time "future" DEĞİLSE: outlook="none", explicit=false. Bu madde için karar biter.
+
+ADIM 2 — KİMİN GÖRÜŞÜ? own_view=true yalnızca konuşmacı beklentiyi KENDİ görüşü olarak söylüyorsa.
+   own_view=false örnekleri:
+   - Başkasını aktarmak: bir kurum, banka, analist, "piyasa", "yatırımcılar", "bazıları",
+     "konuşuluyor", "kaygısı var", "... diyor", "... diyenler / bahsedenler var", "... bekleniyor"
+     (konuşmacı açıkça katılmıyorsa).
+   - Merkez bankasının / Fed'in / hükümetin kendi politikası veya açıklaması hakkındaki aktarım.
+   - Piyasanın ne fiyatladığını veya yatırımcıların ruh hâlini anlatmak.
+   own_view=false ise explicit=false.
+
+ADIM 3 — KOŞUL TESTİ. Seçtiğin quote cümlesindeki beklenti bir "-sa/-se" koşuluna bağlı mı
+("eğer ... olursa", "kırarsa", "aşarsa", "devam ederse", "gelirse", "ancak ... ile olur")?
+   Bağlıysa ve konuşmacı koşulun gerçekleşeceğini AYRICA söylemiyorsa → explicit=false (yön
+   yazılabilir).
+   Koşul SAYILMAZ, ana senaryodur:
+   - Seviye korunduğu sürece verilen teknik senaryo: "... üzerinde kaldıkça / kaldığı sürece
+     yükseliş bekliyorum".
+   - Varsayılan senaryo: "büyük bir sürpriz olmadıkça", "mevcut gidişat sürerse", "böyle giderse"
+     ile söylenen beklenti.
+   - Uyarı biçimi: "... görürseniz şaşırmayın".
+
+ADIM 4 — YÖN ve KESİNLİK (sadece time="future" ve own_view=true ise):
+1. Aracın FİYAT YÖNÜ sorulur, ekonominin genel durumu değil.
    "Rezervler eriyor, ekonomi kötü" tek başına Dolar/TL için yön değildir → "none".
    "Kur 80 liraya çıkabilir", "TL değer kaybetmeye devam edecek" → Dolar/TL için "up".
-   Borsa için "olumlu bakıyorum, alım fırsatı, yatırım yapılabilir" → "up"; "uzak durun, düşüş sürer" → "down".
-3. Araç tanımına uy. Dolar/TL maddesinde yalnızca USD/TRY yönü sayılır; EUR/USD paritesi veya dolar endeksi (DXY) hakkındaki görüş Dolar/TL görüşü değildir. BIST 100 maddesinde tek bir hisse hakkındaki görüş endeks görüşü değildir.
-4. outlook değerleri:
+   Borsa için "olumlu bakıyorum, alım fırsatı, yatırım yapılabilir" → "up"; "uzak durun, düşüş
+   sürecek" → "down".
+   Fiyatın başka bir şeye (enflasyon, büyüme, ihracat, şirketler) ETKİSİNİ anlatmak fiyat beklentisi
+   değildir → "none".
+   "Geri gelecek", "geri çekilecek", "gevşeyecek", "sarkacak" bir yükselişten sonra söylendiyse
+   fiyatın DÜŞECEĞİ anlamına gelir → "down".
+2. Araç tanımına uy. Dolar/TL maddesinde yalnızca USD/TRY yönü sayılır; EUR/USD paritesi veya dolar
+   endeksi (DXY) hakkındaki görüş Dolar/TL görüşü değildir. BIST 100 maddesinde tek bir hisse
+   hakkındaki görüş endeks görüşü değildir.
+3. outlook değerleri:
    "up"   = fiyatın yükseleceğini bekliyor
    "down" = fiyatın düşeceğini bekliyor
    "flat" = açıkça yatay / dar bant seyir bekliyor
-   "none" = ileriye dönük yön belirtmiyor, sadece bilgi/rakam/seviye aktarıyor veya konuya değinip geçiyor
-5. explicit=true: konuşmacının ANA SENARYOSU olarak bir yön söylemesi.
-   - Doğrudan ifade: "yükselecek", "hedefim 5000", "düşüş bekliyorum", "alım fırsatı", "satış zamanı", "yukarı yönlü devamını bekliyorum".
-   - Destek koşuluyla verilen teknik ana senaryo da explicit=true: "4300 üzerinde kaldıkça yükseliş bekliyorum", "80 bin üstünde kaldığı sürece hedef 92 bin". Bu, analistin beklediği yöndür.
-   - Güçlü uyarı biçimi de explicit=true: "doları 80 liradan görürseniz şaşırmayın", "2027'de Brent 50 dolara düşerse şaşırmayın".
-   explicit=false: yönün kendisi ana senaryo değil, sadece bir ihtimal olarak söylenmişse:
-   - Alternatif / risk senaryosu: "4300 kırılırsa 4100'e düşebilir", "faiz uzun süre yüksek kalırsa terse dönebilir".
-   - Dış bir OLAYA bağlı "eğer ... olursa/uzarsa" ifadeleri ("savaş uzarsa petrol yükselir", "faizler artarsa hisseler etkilenir"), konuşmacı o olayın gerçekleşmesini beklediğini AYRICA söylemiyorsa.
-   Şu anki durumu anlatmak tahmin değildir → "none": "yatay seyrediyor", "denge arayışında", "dar bantta sıkıştı" (ileriye dönük "devam edecek" demiyorsa).
-   - Kaçamak: "her şey olabilir", "yukarı da aşağı da gidebilir", "dikkatli olmak lazım".
-   Sadece destek/direnç seviyesi saymak yön değildir → "none".
+   "none" = ileriye dönük yön belirtmiyor, sadece bilgi/rakam/seviye aktarıyor veya konuya değinip
+   geçiyor
+4. time="future", own_view=true ve outlook up/down/flat ise VARSAYILAN explicit=true'dur. Aşağıdaki
+   explicit=false durumlarından biri yoksa explicit=true yaz.
+   explicit=true: konuşmacının ANA SENARYOSU olarak bir yön söylemesi.
+   - Doğrudan ifade: "yükselecek", "hedefim 5000", "düşüş bekliyorum", "alım fırsatı", "satış
+     zamanı", "yukarı yönlü devamını bekliyorum".
+   - Destek koşuluyla verilen teknik ana senaryo da explicit=true: "4300 üzerinde kaldıkça yükseliş
+     bekliyorum", "80 bin üstünde kaldığı sürece hedef 92 bin". Bu, analistin beklediği yöndür.
+   - Güçlü uyarı biçimi de explicit=true: "doları 80 liradan görürseniz şaşırmayın", "2027'de Brent
+     50 dolara düşerse şaşırmayın".
+   - Olasılık kipiyle söylenen ama konuşmacının vardığı yön de explicit=true: "yukarı doğru sert bir
+     hareket gelebilir", "bu seviyeleri görebiliriz", "bence aşağı gelme ihtimali yüksek". "-ebilir"
+     tek başına koşul veya kaçamak değildir.
+   explicit=false: yönün kendisi ana senaryo değil, sadece bir alternatif veya tetik olarak
+   söylenmişse:
+   - Alternatif / risk senaryosu: "4300 kırılırsa 4100'e düşebilir", "faiz uzun süre yüksek kalırsa
+     terse dönebilir".
+   - Seviye tetikleyicisi / işlem planı: "şu seviyenin üstüne atarsa al sinyali gelir", "bu seviyeyi
+     aşarsa alım yapacağım", "destek kırılırsa trend bozulur".
+   - Dış bir OLAYA bağlı "eğer ... olursa / devam ederse / uzarsa" ifadeleri ("savaş uzarsa petrol
+     yükselir", "faiz indirimi gecikirse hisseler zayıflar"), konuşmacı o olayın gerçekleşmesini
+     beklediğini AYRICA söylemiyorsa.
+   - Dilek, temenni, ihtiyat tavsiyesi: "keşke bir yükseliş görsek", "dikkatli olmak lazım",
+     "temkinli olmakta fayda var".
+   - Geçmişten genelleme veya varsayımsal örnek: "geçmişte bu dönemlerde genelde yükselmiş",
+     "düzenli birikim yapan uzun vadede kazanır".
+   - Kaçamak: "her şey olabilir", "yukarı da aşağı da gidebilir".
+   - Bir beklentiyi reddetmek için anmak: "fiyat yükselir diye beklemek yerine başka araca geçin"
+     yön değil, tavsiyedir; konuşmacının kendi yön cümlesi yoksa → "none".
+   Sadece destek/direnç seviyesi saymak veya "şu seviyeyi takip edeceğim" demek yön değildir →
+   "none".
    outlook="none" ise explicit=false olmalıdır.
-6. Başkasının görüşünü aktarmak ("Goldman 5000 dolar bekliyor") konuşmacının görüşü DEĞİLDİR; konuşmacı açıkça katılıyorsa sayılır.
-7. Aynı araç için zıt yönler varsa konuşmacının vardığı sonucu / ana mesajı seç. Kısa vade ve uzun vade farklıysa ana vurguyu seç ve horizon alanına yaz. Eşit ağırlıkta zıt yönler → explicit=false.
-8. quote: konuşmacının bu beklentiyi dile getirdiği cümle, transkript kesitinden KELİMESİ KELİMESİNE, en fazla 200 karakter. Kesitte uygun cümle yoksa "". Uydurma.
-9. horizon: konuşmacı bir zaman belirttiyse kısa Türkçe ifade ("bu hafta", "yıl sonuna kadar", "orta vade"); belirtmediyse "".
-10. speaker: bu beklentiyi dile getiren kişi. Konuşmacı listesi verildiyse adı listedeki yazımıyla aynen yaz. Sunucu söylediyse "sunucu", kimin söylediğinden emin değilsen "bilinmiyor". Tek konuşmacılı videoda konuşmacının adını yaz.
+5. Aynı araç için zıt yönler varsa konuşmacının vardığı sonucu / ana mesajı seç. Kısa vade ve uzun
+   vade farklıysa ana vurguyu seç ve horizon alanına yaz. Eşit ağırlıkta zıt yönler →
+   explicit=false.
 
-ÖRNEKLER:
-- Dolar/TL | "Bir sabah uyandığınızda doları 80 lira civarında görürseniz kimse şaşırmasın" → {"outlook":"up","explicit":true}
-- Dolar/TL | "Merkez Bankası rezervleri erimeye devam ediyor" (yön yok) → {"outlook":"none","explicit":false}
-- Dolar/TL | "EUR/USD paritesinde yükseliş bekleniyor, euro değer kazanacak" → {"outlook":"none","explicit":false}
-- BIST 100 | "Endeks %1,04 düştü, işlem hacmi son 4 ayın en düşüğü" → {"outlook":"none","explicit":false}
-- BIST 100 | "14.720 desteği üzerinde kalındığı sürece yukarı yönlü hareketin sürmesini bekliyorum" → {"outlook":"up","explicit":true}
-- Altın | "Altın yatırımı önermiyorum, çok yukarı hareket beklemiyorum" → {"outlook":"flat","explicit":true}
-- Altın | "4300 kırılırsa 4100'e kadar düşebilir" (ana senaryo değil) → {"outlook":"down","explicit":false}
-- Gümüş | "Bu hafta 70-71 dolara kadar toparlanma bekliyorum" → {"outlook":"up","explicit":true}
+ALANLAR:
+- quote: time / own_view / outlook kararını dayandırdığın, konuşmacının bu GELECEK beklentisini
+  dile getirdiği cümle; transkript kesitinden KELİMESİ KELİMESİNE, en fazla 200 karakter.
+  Şimdiki/geçmiş durumu anlatan cümleyi quote olarak seçme. Kesitte uygun cümle yoksa "" ve
+  explicit=false. Uydurma.
+- horizon: konuşmacı bir zaman belirttiyse kısa Türkçe ifade ("bu hafta", "yıl sonuna kadar", "orta
+  vade"); belirtmediyse "".
+- speaker: bu beklentiyi dile getiren kişi. Konuşmacı listesi verildiyse adı listedeki yazımıyla
+  aynen yaz. Sunucu söylediyse "sunucu", kimin söylediğinden emin değilsen "bilinmiyor". Tek
+  konuşmacılı videoda konuşmacının adını yaz.
+
+ÖRNEKLER (beklenti VAR):
+- Dolar/TL | "Bir sabah uyandığınızda doları 80 lira civarında görürseniz kimse şaşırmasın" →
+  {"time":"future","own_view":true,"outlook":"up","explicit":true}
+- BIST 100 | "14.720 desteği üzerinde kalındığı sürece yukarı yönlü hareketin sürmesini bekliyorum"
+  → {"time":"future","own_view":true,"outlook":"up","explicit":true}
+- Altın | "Altın yatırımı önermiyorum, çok yukarı hareket beklemiyorum" →
+  {"time":"future","own_view":true,"outlook":"flat","explicit":true}
+- Gümüş | "Bu hafta 70-71 dolara kadar toparlanma bekliyorum" →
+  {"time":"future","own_view":true,"outlook":"up","explicit":true}
+- BIST 100 | "Önümüzdeki haftalarda da satış baskısının süreceğini düşünüyorum" →
+  {"time":"future","own_view":true,"outlook":"down","explicit":true}
+- Altın | "Bu sert yükselişin ardından fiyatın hızla geri geleceğini düşünüyorum" →
+  {"time":"future","own_view":true,"outlook":"down","explicit":true}
+
+ÖRNEKLER (beklenti YOK):
+- BIST 100 | "Endeks %1,04 düştü, işlem hacmi son 4 ayın en düşüğü" →
+  {"time":"past","own_view":true,"outlook":"none","explicit":false}
+- Altın | "Güçlü dolar verisi altını aşağı çekti" →
+  {"time":"past","own_view":true,"outlook":"none","explicit":false}
+- Petrol | "Fiyat üzerindeki satış baskısı sürüyor" →
+  {"time":"present","own_view":true,"outlook":"none","explicit":false}
+- Altın | "Grafikte ana yükselen trend hâlâ korunuyor" →
+  {"time":"present","own_view":true,"outlook":"none","explicit":false}
+- BIST 100 | "Endeks günü ekside, satıcılar ağır basıyor" →
+  {"time":"present","own_view":true,"outlook":"none","explicit":false}
+- ABD | "Nasdaq'ta alımlar sürüyor, endeks zirvede" →
+  {"time":"present","own_view":true,"outlook":"none","explicit":false}
+- BIST 100 | "Piyasalar veri öncesinde bugün yatay seyrediyor" →
+  {"time":"present","own_view":true,"outlook":"none","explicit":false}
+- Dolar/TL | "Kurdaki artış ithalatçıların maliyetini yükseltiyor" →
+  {"time":"present","own_view":true,"outlook":"none","explicit":false}
+- Dolar/TL | "Merkez Bankası rezervleri erimeye devam ediyor" (yön yok) →
+  {"time":"present","own_view":true,"outlook":"none","explicit":false}
+- Dolar/TL | "Piyasada yıl sonunda kurun 55 lira olacağı konuşuluyor" →
+  {"time":"future","own_view":false,"outlook":"up","explicit":false}
+- Dolar/TL | "Merkez Bankası kurun daha hızlı artmasına izin vereceğini açıkladı" →
+  {"time":"future","own_view":false,"outlook":"up","explicit":false}
+- Dolar/TL | "EUR/USD paritesinde yükseliş bekleniyor, euro değer kazanacak" →
+  {"time":"future","own_view":false,"outlook":"none","explicit":false}
+- Altın | "4.200 üstünde kapanış gelirse pozisyon açacağım" →
+  {"time":"future","own_view":true,"outlook":"up","explicit":false}
+- Altın | "4300 kırılırsa 4100'e kadar düşebilir" (ana senaryo değil) →
+  {"time":"future","own_view":true,"outlook":"down","explicit":false}
+- Gümüş | "34 dolar direnç, 31 dolar destek olarak izlenmeli" →
+  {"time":"future","own_view":true,"outlook":"none","explicit":false}
 
 ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
-{"items":[{"mention_id":<sayı>,"outlook":"up|down|flat|none","explicit":true|false,"horizon":"","quote":"","speaker":"","reason":"en fazla 1 cümle Türkçe gerekçe"}]}
+{"items":[{"mention_id":<sayı>,"time":"future|present|past","own_view":true|false,
+  "outlook":"up|down|flat|none","explicit":true|false,"horizon":"","quote":"","speaker":"",
+  "reason":"en fazla 1 cümle Türkçe gerekçe"}]}
 Girdideki her mention_id için tam bir öğe döndür."""
 
 
