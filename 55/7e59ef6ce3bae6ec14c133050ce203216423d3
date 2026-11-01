@@ -1,0 +1,27 @@
+README.md
+  s_4b1d682363bdcd::t_cdf9b3dc00242f 55-69
+src/config.py
+  s_4b1d682363bdcd::t_be7da255f13875 23-28
+src/ingestion/service.py
+  s_4b1d682363bdcd::t_c984cf99104bd5 212-223,225-226,232-243
+src/llm/prompts.py
+  s_4b1d682363bdcd::t_3e9a9b6ec32d78 14-15
+tests/ingestion/test_llm_pipeline_helpers.py
+  s_4b1d682363bdcd::t_5bd01b7044d66a 109-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "557e59ef6ce3bae6ec14c133050ce203216423d3",
+  "prompts": {},
+  "sessions": {
+    "s_4b1d682363bdcd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cfd21591-6f83-463b-8b53-4b445909cec8",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
