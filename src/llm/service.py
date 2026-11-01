@@ -182,7 +182,7 @@ def _call_minimax_json(prompt: str) -> dict[str, Any]:
     if not settings.MINIMAX_BASE_URL or not settings.MINIMAX_API_KEY:
         raise LLMGenerationError("MINIMAX_BASE_URL and MINIMAX_API_KEY must be configured.")
 
-    model_name = settings.MINIMAX_MODEL or "MiniMax-M2.7"
+    model_name = settings.MINIMAX_MODEL or "MiniMax-M3.1-Flash"
     max_attempts = max(1, int(settings.MINIMAX_RETRY_MAX_ATTEMPTS))
     timeout_seconds = max(15, int(settings.MINIMAX_TIMEOUT_SECONDS))
 

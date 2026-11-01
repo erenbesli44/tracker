@@ -9,14 +9,14 @@ class Settings(BaseSettings):
     LLM_DEFAULT_OUTPUT_LANGUAGE: str = "tr"
     MINIMAX_BASE_URL: str | None = None  # OpenAI-compatible, e.g. https://api.minimax.io/v1
     MINIMAX_API_KEY: str | None = None
-    MINIMAX_MODEL: str = "MiniMax-M2.7"
+    MINIMAX_MODEL: str = "MiniMax-M3.1-Flash"
     # Per-request timeout for MiniMax. MiniMax commonly takes 60-180s to emit
     # a long JSON analysis, so the default is generous.
     MINIMAX_TIMEOUT_SECONDS: int = 240
     MINIMAX_RETRY_MAX_ATTEMPTS: int = 4
     MINIMAX_RETRY_BASE_DELAY_SECONDS: float = 1.5
     MINIMAX_RETRY_MAX_DELAY_SECONDS: float = 20.0
-    # Characters of (timestamp-rendered) transcript sent to the analysis call (MiniMax-M2.7).
+    # Characters of (timestamp-rendered) transcript sent to the analysis call (MiniMax-M3.1-Flash).
     # 80k sends a ~60 min video whole (~1.2k rendered chars per minute, ~25k tokens); longer
     # transcripts are cut to head/middle/tail at this size. Tune via env.
     ANALYSIS_TRANSCRIPT_MAX_CHARS: int = 80000
