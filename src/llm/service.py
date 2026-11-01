@@ -2,7 +2,9 @@
 
 import json
 import logging
+import threading
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import openai
@@ -36,8 +38,81 @@ _RETRYABLE_ERROR_PHRASES = (
 )
 
 
+# Reasoning depth per call type. MiniMax-M3.1-Flash accepts low|medium|high|xhigh|max and uses
+# max when the field is omitted; at max, reasoning is ~85-90 % of a call's tokens (2026-11-01).
+_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+_EFFORT_SETTING_BY_PURPOSE = {
+    "analysis": "MINIMAX_EFFORT_ANALYSIS",
+    "outlook": "MINIMAX_EFFORT_OUTLOOK",
+    "quote_clean": "MINIMAX_EFFORT_QUOTE_CLEAN",
+    "participants": "MINIMAX_EFFORT_PARTICIPANTS",
+    "market_inference": "MINIMAX_EFFORT_INFERENCE",
+}
+_USAGE_KEYS = ("calls", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens")
+
+
 class LLMGenerationError(Exception):
     """Raised when structured generation cannot be completed."""
+
+
+def reasoning_effort_for(purpose: str) -> str | None:
+    """Configured reasoning_effort for a call purpose; None omits the field (model default)."""
+    name = _EFFORT_SETTING_BY_PURPOSE.get(purpose, "MINIMAX_EFFORT_DEFAULT")
+    value = str(getattr(settings, name, "") or "").strip().lower()
+    if not value:
+        return None
+    if value not in _EFFORT_LEVELS:
+        logger.warning(
+            "Ignoring invalid %s=%r (allowed: %s)", name, value, ", ".join(sorted(_EFFORT_LEVELS))
+        )
+        return None
+    return value
+
+
+# In-process token totals per purpose since start (reset on restart); the youtube-watch
+# pipeline health endpoint shows them. Every call also logs one "MiniMax usage" line.
+_usage_lock = threading.Lock()
+_usage_since = datetime.now(UTC)
+_usage_totals: dict[str, dict[str, int]] = {}
+
+
+def _usage_fields(completion: Any) -> dict[str, int]:
+    """Token counts from the completion's usage block; a missing field counts as 0."""
+    usage = getattr(completion, "usage", None)
+
+    def _int(obj: Any, name: str) -> int:
+        try:
+            return int(getattr(obj, name, None) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "calls": 1,
+        "prompt_tokens": _int(usage, "prompt_tokens"),
+        "cached_tokens": _int(getattr(usage, "prompt_tokens_details", None), "cached_tokens"),
+        "completion_tokens": _int(usage, "completion_tokens"),
+        "reasoning_tokens": _int(
+            getattr(usage, "completion_tokens_details", None), "reasoning_tokens"
+        ),
+    }
+
+
+def _record_usage(purpose: str, fields: dict[str, int]) -> None:
+    with _usage_lock:
+        totals = _usage_totals.setdefault(purpose, dict.fromkeys(_USAGE_KEYS, 0))
+        for key in _USAGE_KEYS:
+            totals[key] += fields.get(key, 0)
+
+
+def usage_snapshot() -> dict[str, Any]:
+    """Token totals since process start, overall and per purpose."""
+    with _usage_lock:
+        by_purpose = {k: dict(v) for k, v in sorted(_usage_totals.items())}
+    total = dict.fromkeys(_USAGE_KEYS, 0)
+    for fields in by_purpose.values():
+        for key in _USAGE_KEYS:
+            total[key] += fields[key]
+    return {"since": _usage_since.isoformat(), "total": total, "by_purpose": by_purpose}
 
 
 def _replace_placeholders(template: str, values: dict[str, str]) -> str:
@@ -178,13 +253,14 @@ def _retry_after_from_openai_error(exc: Exception) -> float | None:
         return None
 
 
-def _call_minimax_json(prompt: str) -> dict[str, Any]:
+def _call_minimax_json(prompt: str, *, purpose: str = "default") -> dict[str, Any]:
     if not settings.MINIMAX_BASE_URL or not settings.MINIMAX_API_KEY:
         raise LLMGenerationError("MINIMAX_BASE_URL and MINIMAX_API_KEY must be configured.")
 
     model_name = settings.MINIMAX_MODEL or "MiniMax-M3.1-Flash"
     max_attempts = max(1, int(settings.MINIMAX_RETRY_MAX_ATTEMPTS))
     timeout_seconds = max(15, int(settings.MINIMAX_TIMEOUT_SECONDS))
+    effort = reasoning_effort_for(purpose)
 
     client = openai.OpenAI(
         api_key=settings.MINIMAX_API_KEY,
@@ -194,19 +270,35 @@ def _call_minimax_json(prompt: str) -> dict[str, Any]:
     )
 
     completion = None
-    for attempt in range(1, max_attempts + 1):
+    attempt = 0
+    while attempt < max_attempts:
+        attempt += 1
+        request: dict[str, Any] = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": settings.MINIMAX_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "extra_body": {"reasoning_split": True},
+        }
+        if effort is not None:
+            request["reasoning_effort"] = effort
+        started = time.monotonic()
         try:
-            completion = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": settings.MINIMAX_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                extra_body={"reasoning_split": True},
-            )
+            completion = client.chat.completions.create(**request)
+            usage = _usage_fields(completion)
+            _record_usage(purpose, usage)
             logger.info(
-                "MiniMax call succeeded model=%s attempt=%d/%d",
+                "MiniMax usage purpose=%s model=%s effort=%s prompt_tokens=%d cached_tokens=%d "
+                "completion_tokens=%d reasoning_tokens=%d seconds=%.1f attempt=%d/%d",
+                purpose,
                 model_name,
+                effort or "default",
+                usage["prompt_tokens"],
+                usage["cached_tokens"],
+                usage["completion_tokens"],
+                usage["reasoning_tokens"],
+                time.monotonic() - started,
                 attempt,
                 max_attempts,
             )
@@ -226,6 +318,24 @@ def _call_minimax_json(prompt: str) -> dict[str, Any]:
         except openai.APIStatusError as exc:
             status = getattr(exc, "status_code", 0) or 0
             error_body = _compact_error_text(str(getattr(exc, "message", "") or exc))[:300]
+            lower_body = error_body.lower()
+            if (
+                status == 400
+                and effort is not None
+                and "reasoning" in lower_body
+                and "effort" in lower_body
+            ):
+                # Models other than M3.1-Flash may reject the field: resend without it and do
+                # not count the rejected request as an attempt.
+                logger.warning(
+                    "MiniMax model=%s rejected reasoning_effort=%s; retrying without it: %s",
+                    model_name,
+                    effort,
+                    error_body,
+                )
+                effort = None
+                attempt -= 1
+                continue
             retryable = _is_retryable_http_error(status, error_body)
             if retryable and attempt < max_attempts:
                 delay = _retry_delay_seconds(attempt, _retry_after_from_openai_error(exc))
@@ -266,12 +376,12 @@ def _is_minimax_configured() -> bool:
     return bool(settings.MINIMAX_BASE_URL and settings.MINIMAX_API_KEY)
 
 
-def _call_llm_json(prompt: str) -> dict[str, Any]:
+def _call_llm_json(prompt: str, *, purpose: str = "default") -> dict[str, Any]:
     if not _is_minimax_configured():
         raise LLMGenerationError(
             "MiniMax is not configured (MINIMAX_BASE_URL / MINIMAX_API_KEY missing)."
         )
-    return _call_minimax_json(prompt)
+    return _call_minimax_json(prompt, purpose=purpose)
 
 
 def generate_summary_json(
@@ -296,7 +406,7 @@ def generate_summary_json(
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
     )
-    return _call_llm_json(prompt)
+    return _call_llm_json(prompt, purpose="summary")
 
 
 def generate_classification_json(
@@ -321,7 +431,7 @@ def generate_classification_json(
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
     )
-    return _call_llm_json(prompt)
+    return _call_llm_json(prompt, purpose="classification")
 
 
 def generate_economic_thesis_json(
@@ -346,7 +456,7 @@ def generate_economic_thesis_json(
         transcript=transcript,
         output_language=(output_language or settings.LLM_DEFAULT_OUTPUT_LANGUAGE or "tr"),
     )
-    return _call_llm_json(prompt)
+    return _call_llm_json(prompt, purpose="economic_thesis")
 
 
 _CONTENT_MAX_ATTEMPTS = 2
@@ -384,7 +494,7 @@ def generate_analysis_json(
     )
     payload: dict[str, Any] = {}
     for attempt in range(1, _CONTENT_MAX_ATTEMPTS + 1):
-        payload = _call_llm_json(prompt)
+        payload = _call_llm_json(prompt, purpose="analysis")
         key_points = payload.get("key_points")
         if isinstance(key_points, list) and key_points:
             return payload
@@ -431,7 +541,7 @@ def generate_market_inference_json(
 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            payload = _call_llm_json(prompt)
+            payload = _call_llm_json(prompt, purpose="market_inference")
         except LLMGenerationError as exc:
             if attempt < _MAX_ATTEMPTS:
                 logger.warning(
@@ -481,13 +591,13 @@ def generate_outlook_json(
             "items": items_block,
         },
     )
-    return _call_llm_json(prompt)
+    return _call_llm_json(prompt, purpose="outlook")
 
 
 def generate_quote_clean_json(*, items_block: str) -> dict[str, Any]:
     """Lightly edited, readable versions of verbatim transcript quotes."""
     prompt = _replace_placeholders(QUOTE_CLEAN_PROMPT_TEMPLATE, {"items": items_block})
-    return _call_llm_json(prompt)
+    return _call_llm_json(prompt, purpose="quote_clean")
 
 
 def generate_participants_json(
@@ -507,4 +617,4 @@ def generate_participants_json(
             "transcript_intro": transcript_intro,
         },
     )
-    return _call_llm_json(prompt)
+    return _call_llm_json(prompt, purpose="participants")

@@ -13,6 +13,7 @@ from src.config import settings
 from src.database import get_session
 from src.jobs.youtube_watch.config import load_watch_config
 from src.jobs.youtube_watch.models import YouTubeWatchChannelResult, YouTubeWatchRun
+from src.llm import service as llm_service
 from src.models import utc_now
 from src.videos.models import Transcript, Video, VideoSummary
 
@@ -298,6 +299,7 @@ def pipeline_health(session: Session = Depends(get_session)) -> dict:
         "verdict": verdict,
         "latest_run": _serialize_run(latest_run) if latest_run else None,
         "last_24h": last_24h,
+        "llm_usage_since_start": llm_service.usage_snapshot(),
         "recent_failures": recent_failures,
         "stuck_videos": {
             "missing_transcript": int(missing_transcript),

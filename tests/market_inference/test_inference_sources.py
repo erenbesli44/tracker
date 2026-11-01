@@ -194,7 +194,7 @@ def test_agenda_prompt_forbids_direction_in_summary(monkeypatch):
     prompts: list[str] = []
     monkeypatch.setattr(llm_service, "_is_minimax_configured", lambda: True)
 
-    def fake_call(prompt):
+    def fake_call(prompt, **_kwargs):
         prompts.append(prompt)
         return {"direction": "mixed", "confidence": 0.6, "summary": "Özet.", "contributions": []}
 

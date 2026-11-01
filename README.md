@@ -25,3 +25,30 @@ shows progress: `scanned`, `videos_with_new_topics`, `new_mentions_by_topic`,
   half-way; rerunning is safe because only missing topics are added).
 - Each video costs one analysis call (plus one outlook call when instruments are
   added). Watch `failed` / `last_error` for MiniMax errors such as low balance.
+
+## Operator: LLM token usage and reasoning effort
+
+Every MiniMax call logs one line, e.g.
+`MiniMax usage purpose=analysis model=MiniMax-M3.1-Flash effort=medium prompt_tokens=14843
+cached_tokens=128 completion_tokens=6410 reasoning_tokens=2803 seconds=30.4 attempt=1/4`.
+`GET /jobs/youtube-watch/health` → `llm_usage_since_start` sums the same counters per purpose
+(`analysis`, `outlook`, `quote_clean`, `participants`, `market_inference`, …) since the process
+started; they reset on redeploy. Reasoning tokens are billed as output tokens.
+
+MiniMax-M3.1-Flash always thinks and uses `reasoning_effort=max` when the field is omitted; measured
+on 2026-11-01, reasoning was 85–90 % of a call's tokens at max and `medium` kept the same topics
+at about a third of the cost and a quarter of the latency. The depth is set per call type:
+
+| Env | Default | Call |
+|---|---|---|
+| `MINIMAX_EFFORT_ANALYSIS` | `medium` | summary + topics of a new video (also `fill-missing-topics`) |
+| `MINIMAX_EFFORT_OUTLOOK` | empty (= model default, max) | per-instrument view; lower it only after `scripts/eval_outlook_prompts.py` shows no precision loss on ≥ 50 labelled views |
+| `MINIMAX_EFFORT_QUOTE_CLEAN` | `medium` | readable quote |
+| `MINIMAX_EFFORT_PARTICIPANTS` | `medium` | multi-guest participants |
+| `MINIMAX_EFFORT_INFERENCE` | `medium` | daily market inference |
+| `MINIMAX_EFFORT_DEFAULT` | `medium` | legacy summary / classification / economic-thesis prompts |
+
+Values: `low`, `medium`, `high`, `xhigh`, `max`, or empty. Do not use `low`: it dropped 40 % of the
+key levels and let a typo into a cleaned quote. An invalid value is logged and ignored. If the
+configured model rejects the field (HTTP 400 mentioning reasoning effort), the call is resent
+once without it and a warning is logged.
