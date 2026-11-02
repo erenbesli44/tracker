@@ -30,10 +30,11 @@ def _bootstrap() -> None:
     import src.topics.models  # noqa: F401
     import src.videos.models  # noqa: F401
 
-    from src.database import create_db_and_tables, run_lightweight_migrations
+    from src.database import create_db_and_tables
 
     create_db_and_tables()
-    run_lightweight_migrations()
+    # Column migrations run only at API startup (src/main.py): their ALTER TABLEs take
+    # exclusive locks and deadlocked with jobs already running against the same tables.
 
 
 def main() -> int:
