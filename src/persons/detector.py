@@ -78,13 +78,23 @@ def detect_person(title: str | None, channel_handle: str | None) -> str | None:
     return detect_channel_default(channel_handle)
 
 
-def is_multi_guest_channel(channel_handle: str | None) -> bool:
-    """True for channels that host different guests (config: multi_guest_channels)."""
+def _handle_listed(channel_handle: str | None, config_key: str) -> bool:
     key = re.sub(r"[^a-z0-9]", "", _normalize_handle(channel_handle))
     if not key:
         return False
-    configured = _load_config().get("multi_guest_channels", []) or []
+    configured = _load_config().get(config_key, []) or []
     return any(re.sub(r"[^a-z0-9]", "", h.lower()) == key for h in configured)
+
+
+def is_multi_guest_channel(channel_handle: str | None) -> bool:
+    """True for channels that host different guests (config: multi_guest_channels)."""
+    return _handle_listed(channel_handle, "multi_guest_channels")
+
+
+def is_summary_only_channel(channel_handle: str | None) -> bool:
+    """True for general-topic channels that get summaries but no instrument mentions
+    (config: summary_only_channels)."""
+    return _handle_listed(channel_handle, "summary_only_channels")
 
 
 def list_known_person_slugs() -> list[str]:

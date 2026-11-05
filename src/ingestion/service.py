@@ -32,6 +32,7 @@ from src.ingestion.schemas import (
     IngestionYoutubeResponse,
 )
 from src.llm import service as llm_service
+from src.persons import detector as person_detector
 from src.persons import service as persons_service
 from src.topics import service as topics_service
 from src.videos import service as videos_service
@@ -807,7 +808,11 @@ def _auto_fill_missing_analytics_for_new_video(
         session.exec(select(TopicMention).where(TopicMention.video_id == video.id)).first()
         is not None
     )
-    needs_classification = data.classification is None and not has_classification
+    needs_classification = (
+        data.classification is None
+        and not has_classification
+        and not person_detector.is_summary_only_channel(channel.channel_handle)
+    )
     if not needs_summary and not needs_classification:
         return
 
@@ -1020,7 +1025,6 @@ def _resolve_person_from_title(
     title: str | None,
     channel_handle: str | None,
 ) -> tuple[int | None, str]:
-    from src.persons import detector as person_detector
     from src.persons import service as persons_service
 
     slug = person_detector.detect_person(title, channel_handle)
@@ -1745,9 +1749,11 @@ def _retry_incomplete_videos_for_channel(
                 ).first()
                 is not None
             )
-            needs_classification = not has_classification
+            needs_classification = not has_classification and not (
+                person_detector.is_summary_only_channel(channel.channel_handle)
+            )
             if not needs_summary and not needs_classification:
-                continue  # Race: filled in since the SELECT above.
+                continue  # Race: filled in since the SELECT above, or a summary-only channel.
 
             # Same rationale as Branch A — letting metadata be fetched also fixes
             # NULL published_at on legacy rows.
