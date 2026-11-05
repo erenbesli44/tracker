@@ -137,3 +137,9 @@ multi_guest_channels:
   - "meseleekonomi"
   - "integralforextv"
   - "ncminvest-tr"
+
+# summary_only_channels: handles (lowercased, without @) of general economy/politics channels.
+# Their videos get a summary only: no instrument mentions, so no views on the site's
+# instrument pages (owner decision 2026-11-05, Kayıt Dışı İktisat).
+summary_only_channels:
+  - "kayitdisi"

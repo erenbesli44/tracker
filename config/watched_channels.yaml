@@ -52,6 +52,10 @@ channels:
   - handle: "@yatirim101"
     name: "Yatırım 101"
     video_count: 4
+  # Summary only (config/known_persons.yaml summary_only_channels): no instrument views.
+  - handle: "@Kayitdisi"
+    name: "Kayıt Dışı İktisat"
+    video_count: 4
  #- handle: "@EmreŞİRİNileBorsaveFinans"
  #  name: "Emre Şirin"
  #  video_count: 4
