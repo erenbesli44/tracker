@@ -687,3 +687,62 @@ async def test_ingest_youtube_does_not_regenerate_analytics_for_reused_video(
     assert second_payload["actions"]["video"] == "reused"
     assert second_payload["actions"]["summary"] == "skipped"
     assert second_payload["actions"]["classification"] == "skipped"
+
+
+async def test_ingest_youtube_channel_repeated_provider_error_is_not_a_run_error(
+    client: AsyncClient, session, monkeypatch
+):
+    """Members-only uploads keep failing with provider_error on some proxies: the first
+    failures count as run errors, a video that already failed repeatedly does not."""
+    from src.ingestion import service as ingestion_service
+    from src.videos.models import Video
+    from src.videos.service import KNOWN_TRANSCRIPT_FAILURE_ATTEMPTS
+
+    candidate = ingestion_service._ChannelVideoCandidate(
+        video_id="HHHHHHHHHHH",
+        video_url="https://www.youtube.com/watch?v=HHHHHHHHHHH",
+        title="Katıl Özel - members only",
+        published_at=None,
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "_resolve_youtube_channel_id",
+        lambda _channel: "UC5555555555555555555555",
+    )
+    monkeypatch.setattr(
+        ingestion_service,
+        "_list_recent_channel_videos",
+        lambda _channel_id, _limit: ingestion_service._ChannelPlaylistInfo(
+            candidates=[candidate],
+            channel_name="Members Channel",
+            channel_handle="@memberschannel",
+        ),
+    )
+
+    def provider_error(_video_id: str, _langs=None):
+        raise ingestion_service.videos_service.YouTubeTranscriptFetchError(
+            code="provider_error",
+            detail="Failed to fetch transcript from YouTube provider.",
+        )
+
+    monkeypatch.setattr(
+        ingestion_service.videos_service,
+        "fetch_transcript_from_youtube",
+        provider_error,
+    )
+
+    errors = []
+    for _ in range(KNOWN_TRANSCRIPT_FAILURE_ATTEMPTS + 1):
+        response = await client.post(
+            "/ingestions/youtube/channel",
+            json={"youtube_channel": "@memberschannel", "video_count": 1},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["videos_skipped_no_transcript"] == 1
+        errors.append(payload["errors_count"])
+
+    assert errors == [1] * KNOWN_TRANSCRIPT_FAILURE_ATTEMPTS + [0]
+    stored = session.exec(select(Video).where(Video.video_id == "HHHHHHHHHHH")).one()
+    assert stored.transcript_status == "provider_error"
+    assert stored.transcript_attempt_count == KNOWN_TRANSCRIPT_FAILURE_ATTEMPTS + 1

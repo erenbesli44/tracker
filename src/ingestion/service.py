@@ -1706,10 +1706,11 @@ def _retry_incomplete_videos_for_channel(
                     video.video_id, transcript_languages
                 )
             except videos_service.YouTubeTranscriptFetchError as exc:
+                is_run_error = videos_service.is_transcript_run_error(video, exc.code)
                 videos_service.record_transcript_fetch_failure(
                     session, video, code=exc.code, detail=exc.detail
                 )
-                if exc.code == "provider_error":
+                if is_run_error:
                     errors += 1
                     results.append(
                         IngestionYoutubeChannelRunVideoResult(
@@ -1937,10 +1938,12 @@ def ingest_youtube_channel(
                 data.transcript_languages,
             )
         except videos_service.YouTubeTranscriptFetchError as exc:
-            # Only provider_error (transient infra / proxy issue) counts as an error.
-            # transcript_unavailable + video_unavailable are permanent properties of the
-            # video (no captions, members-only, private, age-restricted) — just skip them.
-            is_hard_failure = exc.code == "provider_error"
+            # Only provider_error (transient infra / proxy issue) counts as an error, and
+            # only on a video that has not failed repeatedly before (see
+            # is_transcript_run_error). transcript_unavailable + video_unavailable are
+            # permanent properties of the video (no captions, members-only, private,
+            # age-restricted) — just skip them.
+            is_hard_failure = videos_service.is_transcript_run_error(video, exc.code)
             log_fn = logger.warning if is_hard_failure else logger.info
             log_fn(
                 "Transcript skipped for video_id=%s (code=%s): %s",

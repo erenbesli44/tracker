@@ -228,6 +228,18 @@ def _transcript_retry_delay(code: str, attempt_count: int) -> timedelta:
     return timedelta(seconds=min(cap_seconds, base_seconds * multiplier))
 
 
+# A video whose transcript already failed this often is a stuck video (reported by
+# /jobs/youtube-watch/health), not a new run error. Members-only uploads flip between
+# VideoUnplayable and provider_error depending on the proxy, and must not fail the run.
+KNOWN_TRANSCRIPT_FAILURE_ATTEMPTS = 3
+
+
+def is_transcript_run_error(video: Video, code: str) -> bool:
+    """True when a fetch failure should count as a run error; call before recording it."""
+    previous_attempts = int(video.transcript_attempt_count or 0)
+    return code == "provider_error" and previous_attempts < KNOWN_TRANSCRIPT_FAILURE_ATTEMPTS
+
+
 def transcript_retry_due(video: Video, now: datetime | None = None) -> bool:
     if video.transcript_next_retry_at is None:
         return True
