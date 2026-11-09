@@ -1,0 +1,65 @@
+config/watched_research.yaml
+  s_c4902405432a21::t_1ff247e7a83393 1-23
+src/config.py
+  s_c4902405432a21::t_d393451c71509f 43,71
+src/jobs/README.md
+  s_c4902405432a21::t_38516aa48a33dd 11-12
+src/jobs/research_watch/config.py
+  s_c4902405432a21::t_9a54bb6fb731b0 1-78
+src/jobs/research_watch/digest.py
+  s_c4902405432a21::t_6ddf883ce46db7 1-113
+src/jobs/research_watch/fetcher.py
+  s_c4902405432a21::t_4dd193e57fcd46 1-90
+src/jobs/research_watch/models.py
+  s_c4902405432a21::t_79fbe748a85b0e 1-52
+src/jobs/research_watch/parsers.py
+  s_c4902405432a21::t_a71476d56d307d 1-118
+src/jobs/research_watch/public_router.py
+  s_c4902405432a21::t_b41c9b891e09c0 1-62
+src/jobs/research_watch/router.py
+  s_c4902405432a21::t_7f98aeba729818 1-153
+src/jobs/research_watch/runner.py
+  s_c4902405432a21::t_55263e865729f5 1-90
+src/jobs/research_watch/serialize.py
+  s_c4902405432a21::t_53682203852d4e 1-26
+src/jobs/research_watch/service.py
+  s_c4902405432a21::t_e1f9d160af737d 1-226
+src/llm/prompts.py
+  s_c4902405432a21::t_d8e8d4780700a3 750-800
+src/llm/service.py
+  s_c4902405432a21::t_26018b3adb422b 25,51,623-646
+src/main.py
+  s_c4902405432a21::t_f4e2b6950dd0f3 28,76-77,94-95
+tests/research_watch/fixtures/article_2025_12_23.html
+  s_c4902405432a21::t_826935109a1be1 1-538
+tests/research_watch/fixtures/article_2026_11_04.html
+  s_c4902405432a21::t_1c8c426f9aa809 1-499
+tests/research_watch/fixtures/listing.html
+  s_c4902405432a21::t_8c6b8c81cc81ee 1-437
+tests/research_watch/helpers.py
+  s_c4902405432a21::t_143a54e4b64428 1-74
+tests/research_watch/test_digest.py
+  s_c4902405432a21::t_44fb873e44a332 1-61
+tests/research_watch/test_parsers.py
+  s_c4902405432a21::t_0ee59c1f3434b6 1-56
+tests/research_watch/test_routers.py
+  s_c4902405432a21::t_9a43425e65a442 1-93
+tests/research_watch/test_service.py
+  s_c4902405432a21::t_22612e7e6e35ec 1-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f575b815a1db122c3cf883d5c220c09d5a7e4556",
+  "prompts": {},
+  "sessions": {
+    "s_c4902405432a21": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a45eaaa3-ecac-4c3f-82b0-f760b2a6c7d6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
