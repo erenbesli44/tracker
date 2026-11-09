@@ -2,8 +2,11 @@
 
 Idempotent: a post is stored once per URL. A normal run looks only at posts dated within
 ``lookback_days`` and stores at most ``max_new_items``; a backfill (``since``) bypasses the
-daily run limit and takes posts dated on or after ``since``, up to ``max_items``. Digests that
-failed (model error or bad shape) are retried on later runs, up to MAX_DIGEST_ATTEMPTS.
+daily run limit and takes posts dated on or after ``since``, up to ``max_items``. A post whose
+page cannot be fetched or parsed is stored as a ``fetch_failed`` stub and retried on later runs up
+to MAX_FETCH_ATTEMPTS; digests that failed (model error or bad shape) are retried up to
+MAX_DIGEST_ATTEMPTS. The run lock is per process: a Coolify run and an API-triggered run at the
+same moment may race; the URL unique constraint keeps the data consistent.
 """
 
 import json
@@ -12,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from hashlib import sha256
+from typing import Protocol
 
 from sqlalchemy import Engine, func
 from sqlmodel import Session, select
@@ -27,13 +31,15 @@ logger = logging.getLogger(__name__)
 
 SKIPPED_RATE_LIMIT = "skipped_rate_limit"
 MAX_DIGEST_ATTEMPTS = 3
+MAX_FETCH_ATTEMPTS = 3
+FETCH_FAILED = "fetch_failed"
 DEFAULT_BACKFILL_MAX_ITEMS = 20
 RETRY_STATUSES = ("pending", "failed")
 
 DigestFn = Callable[..., dict]
 
 
-class Fetcher:  # the two things the run needs; HttpFetcher in production
+class Fetcher(Protocol):  # HttpFetcher in production
     def get_text(self, url: str) -> str: ...
 
 
@@ -142,24 +148,37 @@ def _process_source(engine, config, source, fetcher, digest_fn, since, max_items
     summary.items_seen += len(candidates)
 
     with Session(engine) as session:
-        known = set(
-            session.exec(select(ResearchItem.url).where(ResearchItem.source_slug == source.slug))
+        known = {
+            item.url: item
+            for item in session.exec(
+                select(ResearchItem).where(ResearchItem.source_slug == source.slug)
+            )
+        }
+        new = sorted(
+            (e for e in candidates if _wants_fetch(known.get(e.url))),
+            key=lambda e: e.published_at,
         )
-        new = sorted((e for e in candidates if e.url not in known), key=lambda e: e.published_at)
         if len(new) > limit:
             summary.notes.append(
-                f"{source.slug}: {len(new)} new posts, only the oldest {limit} taken this run"
+                f"{source.slug}: {len(new)} posts to fetch, only the oldest {limit} this run"
             )
             new = new[:limit]
         for entry in new:
+            item = known.get(entry.url) or ResearchItem(
+                source_slug=source.slug, url=entry.url, title=entry.title or entry.url, sha256=""
+            )
             try:
-                session.add(_fetch_item(source, entry, fetcher))
-                session.commit()
+                _fill_item(item, entry, fetcher)
                 summary.items_new += 1
             except Exception as exc:
-                session.rollback()
+                # Stored as a stub so a broken post is retried a few times, not on every run.
                 logger.error("Post failed %s: %s", entry.url, exc, exc_info=True)
-                summary.errors.append(f"{entry.url}: {type(exc).__name__}: {str(exc)[:300]}")
+                item.review_status = FETCH_FAILED
+                item.fetch_attempts += 1
+                item.digest_error = f"fetch: {type(exc).__name__}: {str(exc)[:300]}"
+                summary.errors.append(f"{entry.url}: {item.digest_error}")
+            session.add(item)
+            session.commit()
 
         todo = session.exec(
             select(ResearchItem)
@@ -180,20 +199,28 @@ def _process_source(engine, config, source, fetcher, digest_fn, since, max_items
                 summary.digests_flagged += 1
 
 
-def _fetch_item(source: ResearchSource, entry: parsers.ListingEntry, fetcher) -> ResearchItem:
+def _wants_fetch(item: ResearchItem | None) -> bool:
+    if item is None:
+        return True
+    return item.review_status == FETCH_FAILED and item.fetch_attempts < MAX_FETCH_ATTEMPTS
+
+
+def _fill_item(item: ResearchItem, entry: parsers.ListingEntry, fetcher) -> None:
     article = parsers.parse_tcmb_article(fetcher.get_text(entry.url))
     if len(article.body_text) < 500:
         raise ValueError(f"article body too short ({len(article.body_text)} chars)")
-    return ResearchItem(
-        source_slug=source.slug,
-        url=entry.url,
-        title=article.title or entry.title,
-        authors=json.dumps(article.authors or entry.authors, ensure_ascii=False),
-        category=article.category or entry.category,
-        published_at=article.published_at or entry.published_at,
-        body_text=article.body_text,
-        sha256=sha256(article.body_text.encode("utf-8")).hexdigest(),
-    )
+    title = article.title or entry.title
+    if not title:
+        raise ValueError("article without title")
+    item.title = title
+    item.authors = json.dumps(article.authors or entry.authors, ensure_ascii=False)
+    item.category = article.category or entry.category
+    item.published_at = article.published_at or entry.published_at
+    item.body_text = article.body_text
+    item.sha256 = sha256(article.body_text.encode("utf-8")).hexdigest()
+    item.fetched_at = utc_now()
+    item.review_status = "pending"
+    item.digest_error = None
 
 
 def digest_item(session: Session, item: ResearchItem, source: ResearchSource, digest_fn) -> None:

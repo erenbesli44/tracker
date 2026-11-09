@@ -24,6 +24,7 @@ class ResearchItem(SQLModel, table=True):
     body_text: str = Field(default="")
     sha256: str = Field(max_length=64, index=True)
     fetched_at: datetime = Field(default_factory=utc_now)
+    fetch_attempts: int = Field(default=0)  # failed page fetches (status fetch_failed)
     digest_json: str | None = Field(default=None)
     digest_version: str | None = Field(default=None, max_length=40)
     digest_attempts: int = Field(default=0)
@@ -31,8 +32,8 @@ class ResearchItem(SQLModel, table=True):
     digested_at: datetime | None = Field(default=None)
     # Every number in the digest occurs in body_text, and the quote is verbatim.
     checks_passed: bool | None = Field(default=None)
-    # pending (no digest yet) / failed (LLM error, retried) / needs_review / auto / reviewed /
-    # rejected. Only auto and reviewed are served.
+    # fetch_failed (page not fetched, retried) / pending (no digest yet) / failed (LLM error,
+    # retried) / needs_review / auto / reviewed / rejected. Only auto and reviewed are served.
     review_status: str = Field(default="pending", max_length=20, index=True)
 
 

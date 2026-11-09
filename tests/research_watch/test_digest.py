@@ -59,3 +59,48 @@ def test_single_finding_is_kept_but_flagged():
 def test_wrong_shape_raises(raw):
     with pytest.raises(DigestFormatError):
         validate_digest(raw)
+
+
+@pytest.mark.parametrize(
+    "so_what,missing",
+    [
+        ("Kredilerin yüzde 2'si bu firmalarda.", "2"),  # 2 occurs, never as "yüzde 2"
+        ("Kredi kullanımı 3 kat arttı.", "3"),  # 3 occurs, but never as "3 kat"
+        ("Bu oran 4 yılda değişti.", "4"),  # [4] is a footnote marker, not a number
+    ],
+)
+def test_small_integers_need_the_same_neighbouring_word(so_what, missing):
+    problems = check_digest(_digest(so_what=so_what), BODY)
+    assert problems == [f"numbers not in source: {missing}"]
+
+
+def test_small_integers_with_their_word_pass():
+    so_what = "Yaklaşık 3 bin firma; 57 milyar TL para piyasası fonlarında; on binde 3."
+    assert check_digest(_digest(so_what=so_what), BODY) == []
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "…fon maruziyeti yüksek firmaların ekonomideki ağırlığı görece düşük.",  # fragment
+        "fon maruziyeti yüksek firmaların ekonomideki ağırlığı görece düşük",  # no sentence end
+        "Diğer bir ifadeyle, fon maruziyeti yüksek firmaların ekonomideki ağırlığı",  # cut short
+    ],
+)
+def test_quote_must_be_a_whole_sentence(quote):
+    problems = check_digest(_digest(quote=quote), BODY)
+    assert problems == ["quote is not a verbatim sentence of the source"]
+
+
+def test_first_sentence_of_a_paragraph_is_a_valid_quote():
+    quote = "Bir sonraki adımda firmaların ticari bağlantılarına bakıyoruz."
+    assert check_digest(_digest(quote=quote), BODY) == []
+
+
+@pytest.mark.parametrize(
+    "so_what",
+    ["TCMB'nin beklentisi kredilerin artması.", "Merkez Bankası faizlerin düşmesini öngörüyor."],
+)
+def test_wider_bank_forecast_wording_is_flagged(so_what):
+    problems = check_digest(_digest(so_what=so_what), BODY)
+    assert len(problems) == 1 and problems[0].startswith("forbidden wording")

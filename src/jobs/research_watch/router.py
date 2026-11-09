@@ -116,12 +116,15 @@ def review_item(item_id: int, decision: ReviewDecision, session: SessionDep) -> 
     item = session.get(ResearchItem, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="item_not_found")
-    if decision.review_status == "reviewed" and not item.digest_json:
-        raise HTTPException(status_code=409, detail="no digest to approve")
+    if decision.review_status == "reviewed" and (
+        not item.digest_json or item.review_status not in ("needs_review", "auto", "reviewed")
+    ):
+        raise HTTPException(status_code=409, detail="no current digest to approve")
     item.review_status = decision.review_status
     session.add(item)
     session.commit()
-    return {"id": item.id, "review_status": item.review_status}
+    # The site caches digests for up to 1 h: an un-approval shows there within the hour.
+    return {"id": item.id, "review_status": item.review_status, "checks_passed": item.checks_passed}
 
 
 def _redigest(item_id: int) -> None:

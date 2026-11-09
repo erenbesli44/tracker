@@ -27,9 +27,18 @@ TEXT_FIELDS = ("headline", "why_now", "so_what", "not_said", "quote", "basis")
 LIMITS = {"headline": 120, "finding": 220}
 
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
+_FOOTNOTE = re.compile(r"\[\d+\]")
+_PERCENT = re.compile(r"%\s?(?=\d)")
+_SENTENCE_END = (".", "!", "?")
 # A post by bank staff is not the bank's forecast, and nothing here is a trade call.
 _FORBIDDEN = (
-    re.compile(r"\bTCMB\b[^.]{0,40}\b(bekliyor|öngörüyor|tahmin ediyor)", re.IGNORECASE),
+    re.compile(
+        r"\b(TCMB|Merkez Bankası|Banka)\b[^.]{0,40}\b(bekliyor|öngörüyor|tahmin ediyor)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(TCMB|Merkez Bankası)['’]?(nın|nin)? (beklentisi|tahmini|öngörüsü)", re.IGNORECASE
+    ),
     re.compile(r"\b(al|sat|alım|satım)\s+(sinyali|fırsatı|önerisi)", re.IGNORECASE),
 )
 
@@ -55,7 +64,7 @@ def validate_digest(raw: Any) -> dict:
         raise DigestFormatError("findings is not a list")
     findings = [f.strip() for f in findings if isinstance(f, str) and f.strip()]
     if not 1 <= len(findings) <= 3:
-        raise DigestFormatError(f"findings has {len(findings)} items, expected 2-3")
+        raise DigestFormatError(f"findings has {len(findings)} items, expected 1-3")
     digest["findings"] = findings
     terms = raw.get("terms") or []
     digest["terms"] = [
@@ -76,12 +85,34 @@ def _normalise(text: str) -> str:
     text = html.unescape(text)
     for curly, plain in (("’", "'"), ("‘", "'"), ("“", '"'), ("”", '"'), ("\xa0", " ")):
         text = text.replace(curly, plain)
+    text = _PERCENT.sub("yüzde ", _FOOTNOTE.sub("", text))
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _in_source(number: str, source: str) -> bool:
-    pattern = rf"(?<![\d.,]){re.escape(number)}(?![\d]|[.,]\d)"
-    return re.search(pattern, source) is not None
+def _number_in_source(text: str, match: re.Match, source: str) -> bool:
+    """Long or decimal numbers must occur as such. A one- or two-digit integer occurs too
+    often by chance (chart numbers, dates, counts), so it must occur next to the same word
+    as in the digest: "57 milyar", "binde 3", "17 Eylül"."""
+    number = match.group()
+    if len(number) > 2 or not number.isdigit():
+        return re.search(rf"(?<![\d.,]){re.escape(number)}(?![\d]|[.,]\d)", source) is not None
+    before = re.search(r"(\w+)\s+$", text[: match.start()])
+    after = re.match(r"\s+(\w+)", text[match.end() :])
+    phrases = []
+    if before:
+        phrases.append(rf"(?<!\w){re.escape(before.group(1))} {number}(?![\d]|[.,]\d)")
+    if after:
+        phrases.append(rf"(?<![\d.,]){number} {re.escape(after.group(1))}")
+    return any(re.search(p, source, re.IGNORECASE) for p in phrases)
+
+
+def _quote_is_sentence(quote: str, body_text: str) -> bool:
+    """The quote is one or more whole sentences of one paragraph of the post."""
+    quote = _normalise(quote).strip("\"' ")
+    if len(quote) < 20 or not quote.endswith(_SENTENCE_END) or quote.startswith(("…", "...")):
+        return False
+    pattern = r"(?:^|(?<=[.!?:] ))" + re.escape(quote) + r"(?=\s|$)"
+    return any(re.search(pattern, _normalise(line)) for line in body_text.splitlines())
 
 
 def check_digest(digest: dict, body_text: str) -> list[str]:
@@ -91,13 +122,16 @@ def check_digest(digest: dict, body_text: str) -> list[str]:
     texts = [digest[k] for k in TEXT_FIELDS] + digest["findings"]
     texts += [t["meaning"] for t in digest["terms"]]
 
-    numbers = {n for text in texts for n in _NUMBER.findall(_normalise(text))}
-    missing = sorted(n for n in numbers if not _in_source(n, source))
+    missing = set()
+    for text in texts:
+        text = _normalise(text)
+        for match in _NUMBER.finditer(text):
+            if not _number_in_source(text, match, source):
+                missing.add(match.group())
     if missing:
-        problems.append(f"numbers not in source: {', '.join(missing)}")
+        problems.append(f"numbers not in source: {', '.join(sorted(missing))}")
 
-    quote = _normalise(digest["quote"]).strip("\"'“”…. ")
-    if len(quote) < 20 or quote not in source:
+    if not _quote_is_sentence(digest["quote"], body_text):
         problems.append("quote is not a verbatim sentence of the source")
 
     if len(digest["findings"]) < 2:

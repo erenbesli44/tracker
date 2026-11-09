@@ -84,7 +84,7 @@ def test_backfill_takes_oldest_first_up_to_the_cap_and_notes_the_rest(engine):
     )
     assert summary.items_seen == 5 and summary.items_new == 2
     assert summary.status == "success"
-    assert any("only the oldest 2 taken" in n for n in summary.notes)
+    assert any("only the oldest 2 this run" in n for n in summary.notes)
     assert [i.url for i in _items(engine)][0] == POST_2025_12_23
     with Session(engine) as session:
         run = session.exec(select(ResearchWatchRun)).one()
@@ -148,3 +148,49 @@ def test_robots_disallow_stops_the_source(engine):
         summary = service.run_once(engine, config(), f, good_digest_fn)
     assert summary.status == "failed" and "RobotsDisallowed" in summary.errors[0]
     assert len(seen) == 1  # only robots.txt was requested
+
+
+def test_unfetchable_post_is_a_stub_retried_three_times_then_left(engine):
+    class Broken(FakeFetcher):
+        def get_text(self, url):
+            if url == POST_2026_11_04:
+                self.urls.append(url)
+                raise httpx.ConnectError("refused")
+            return super().get_text(url)
+
+    cfg = config(max_runs_per_day=10)
+    for _ in range(4):
+        fetcher = Broken()
+        summary = service.run_once(engine, cfg, fetcher, good_digest_fn)
+    assert POST_2026_11_04 not in fetcher.urls  # 4th run: attempts exhausted, not fetched
+    assert summary.status == "success"
+    [item] = _items(engine)
+    assert (item.review_status, item.fetch_attempts) == (service.FETCH_FAILED, 3)
+    assert item.digest_json is None and item.digest_error.startswith("fetch: ConnectError")
+
+
+def test_stub_is_completed_when_the_post_becomes_readable(engine):
+    class FlakyOnce(FakeFetcher):
+        calls = 0
+
+        def get_text(self, url):
+            if url == POST_2026_11_04 and FlakyOnce.calls == 0:
+                FlakyOnce.calls += 1
+                return "<html>bakım</html>"  # body too short
+            return super().get_text(url)
+
+    cfg = config(max_runs_per_day=10)
+    first = service.run_once(engine, cfg, FlakyOnce(), good_digest_fn)
+    assert "body too short" in first.errors[0]
+    service.run_once(engine, cfg, FlakyOnce(), good_digest_fn)
+    [item] = _items(engine)
+    assert item.review_status == "needs_review" and item.checks_passed is True
+    assert item.fetch_attempts == 1 and item.digest_error is None
+
+
+def test_http_fetcher_without_transport_ignores_proxy_env(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:8080")
+    with HttpFetcher("dovizveri-bot/0.1") as fetcher:
+        assert fetcher._client.trust_env is False
+        assert not fetcher._client._mounts  # no proxy transports mounted

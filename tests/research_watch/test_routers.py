@@ -69,7 +69,7 @@ async def test_review_queue_and_decision(client, session):
     response = await client.patch(
         f"/jobs/research-watch/items/{item_id}", json={"review_status": "reviewed"}
     )
-    assert response.json() == {"id": item_id, "review_status": "reviewed"}
+    assert response.json() == {"id": item_id, "review_status": "reviewed", "checks_passed": True}
     assert (await client.get(f"/research/digests/{item_id}")).status_code == 200
     bad = await client.patch(f"/jobs/research-watch/items/{item_id}", json={"review_status": "x"})
     assert bad.status_code == 422
@@ -91,3 +91,21 @@ async def test_run_trigger_validates_input(client):
 async def test_api_key_is_required(client):
     response = await client.get("/research/digests", headers={"X-API-Key": "wrong"})
     assert response.status_code in (401, 403)
+
+
+async def test_cannot_approve_a_stale_digest_after_a_failed_redigest(client, session):
+    item_id = _add(session, POST_2026_11_04, "failed")  # older digest still stored
+    response = await client.patch(
+        f"/jobs/research-watch/items/{item_id}", json={"review_status": "reviewed"}
+    )
+    assert response.status_code == 409
+
+
+def test_cli_rejects_out_of_range_max_items():
+    from src.jobs.research_watch import runner
+
+    for bad in ("-1", "0", "51"):
+        with pytest.raises(SystemExit):
+            runner._parse_args(["--backfill", "--since", "2026-01-01", "--max-items", bad])
+    args = runner._parse_args(["--backfill", "--since", "2026-01-01", "--max-items", "12"])
+    assert args.max_items == 12

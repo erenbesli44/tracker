@@ -64,7 +64,8 @@ GOOD_DIGEST = {
     "so_what": "Doğrudan etkilenen firmaların ekonomideki payı küçük; krediye erişimleri sürüyor.",
     "not_said": "Yazarlar fon sorununun ekonomiye toplam etkisini ölçmediklerini yazıyor.",
     "terms": [{"term": "Maruziyet oranı", "meaning": "Fondaki para / dönen varlıklar."}],
-    "quote": "…fon maruziyeti yüksek firmaların ekonomideki ağırlığı görece düşük.",
+    "quote": "Diğer bir ifadeyle, fon maruziyeti yüksek firmaların ekonomideki ağırlığı "
+    "görece düşük.",
     "basis": "Firma bilançoları, firmalar arası ticaret ve haftalık kredi verileri.",
     "topics": ["faiz-para-politikasi", "not-a-topic"],
 }

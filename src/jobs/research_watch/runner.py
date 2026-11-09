@@ -15,13 +15,20 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 
+def _max_items(value: str) -> int:
+    number = int(value)
+    if not 1 <= number <= 50:
+        raise argparse.ArgumentTypeError("must be between 1 and 50")
+    return number
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m src.jobs.research_watch.runner", description="Research watch job."
     )
     parser.add_argument("--backfill", action="store_true", help="bypass the daily run limit")
     parser.add_argument("--since", type=date.fromisoformat, metavar="YYYY-MM-DD")
-    parser.add_argument("--max-items", type=int, default=None, metavar="N")
+    parser.add_argument("--max-items", type=_max_items, default=None, metavar="N (1-50)")
     args = parser.parse_args(argv)
     if args.backfill != (args.since is not None):
         parser.error("--backfill and --since go together")
