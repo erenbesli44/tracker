@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     MINIMAX_EFFORT_QUOTE_CLEAN: str = "medium"
     MINIMAX_EFFORT_PARTICIPANTS: str = "medium"
     MINIMAX_EFFORT_INFERENCE: str = "medium"
+    MINIMAX_EFFORT_RESEARCH: str = "medium"
     MINIMAX_EFFORT_DEFAULT: str = "medium"  # legacy summary / classification / thesis prompts
     YOUTUBE_PROXY_ENABLED: bool = False
     YOUTUBE_PROXY_MODE: str = "direct"  # direct | rotating
@@ -67,6 +68,7 @@ class Settings(BaseSettings):
     WEBSHARE_API_TIMEOUT_SECONDS: float = 10.0
     WATCH_CONFIG_PATH: str = "config/watched_channels.yaml"
     BROKER_WATCH_CONFIG_PATH: str = "config/watched_brokers.yaml"
+    RESEARCH_WATCH_CONFIG_PATH: str = "config/watched_research.yaml"
     BIST_TICKERS_PATH: str = "config/bist_tickers.txt"
     REDIS_URL: str | None = None  # e.g. redis://:password@host:6379/0
 

@@ -1,0 +1,23 @@
+# Research sources the research_watch job follows (OI-041, doviz repo:
+# docs/research/2026-11-09-tcmb-blog-explainer-review.md). Loader: src/jobs/research_watch/config.py.
+#
+# adapter:      tcmb_blog (one listing page with every post -> article pages)
+# url:          the listing page the adapter starts from
+# auto_publish: false = every digest waits for the owner's review (status needs_review) before it
+#               is served; set true only after the 12-digest evaluation (plan criterion G) passed.
+# No proxy: requests go out directly with the User-Agent below (owner rule, 2026-11-09).
+
+defaults:
+  user_agent: "dovizveri-bot/0.1 (+https://dovizveri.com/iletisim)"
+  max_runs_per_day: 2
+  lookback_days: 21       # a normal run only considers posts dated within this many days
+  max_new_items: 5        # per run; a backfill uses --max-items instead
+
+sources:
+  - slug: tcmb-blog
+    name: "Merkezin Güncesi (TCMB blogu)"
+    adapter: tcmb_blog
+    url: https://tcmbblog.org/wps/wcm/connect/blog/tr/main+menu/analizler/
+    disclaimer: "Yazarların görüşüdür; TCMB'nin resmi görüşü değildir."
+    auto_publish: false
+    enabled: true

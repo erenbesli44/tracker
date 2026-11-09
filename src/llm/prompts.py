@@ -747,3 +747,54 @@ En fazla 200 karakter. Cümle zaten okunur ise aynen döndür.
 ÇIKTI: Yalnızca geçerli JSON, açıklama veya markdown yok:
 {"items":[{"id":<sayı>,"clean":"düzgün cümle"}]}
 Girdideki her id için tam bir öğe döndür."""
+
+
+RESEARCH_DIGEST_PROMPT_VERSION = "research-digest-v1"
+
+# Plain-language digest of one research/blog post (OI-041, doviz repo:
+# docs/research/2026-11-09-tcmb-blog-explainer-review.md §4). The job checks the output
+# mechanically: every number must occur in the post and the quote must be verbatim.
+RESEARCH_DIGEST_PROMPT_TEMPLATE = """\
+Sen ekonomi araştırmalarını herkesin anlayacağı dille anlatan bir editörsün.
+Aşağıda bir merkez bankası blog yazısı var. Okuru ekonomist olmayan, ama haberleri takip eden biri.
+Görevin: yazının ana fikrini ve en önemli bulgularını kısa, sade ve DOĞRU anlatmak.
+
+KURALLAR
+1. Yalnızca yazıda yazanı aktar. Yazıda olmayan neden-sonuç, tahmin veya yorum ekleme.
+2. Her sayı yazıda geçtiği biçimde olmalı ("yüzde 1,2" yerine "%1,2" yazabilirsin; sayının kendisini
+   değiştirme, yuvarlama, toplama veya hesaplama yapma). Emin olmadığın sayıyı yazma.
+3. Yazı bir ölçüm veya analizdir, bir tahmin değildir. "TCMB bekliyor / öngörüyor" gibi
+   ifadeler kullanma; yazarlar "yazarlar", "araştırmacılar" diye anılır. Yön (yükseliş/düşüş)
+   beklentisi, al/sat çağrısı, yatırım tavsiyesi yok.
+4. Yazarların çekincelerini koru: yazı neyi ölçmediğini veya hangi sonuca varmadığını söylüyorsa
+   "not_said" alanına yaz. Yazı böyle bir şey söylemiyorsa en dar haliyle kapsamını yaz.
+5. Kısa cümleler (ortalama 18 kelimeyi geçme), etken çatı, jargon yerine gündelik kelimeler.
+   Kaçınılmaz terimleri "terms" alanında bir satırla açıkla.
+6. "quote" alanı yazıdan KELİMESİ KELİMESİNE bir cümle olmalı (tercihen "Özetle" ile başlayan
+   paragraftan); hiçbir harfini değiştirme.
+7. "topics" yalnızca şu listeden 0-3 değer olabilir; yazı bunlardan birini doğrudan konu
+   almıyorsa boş bırak: doviz-kur, altin, gumus, bist-turk-piyasalari, kripto-paralar,
+   amerikan-piyasalari, petrol-enerji, faiz-para-politikasi, enflasyon
+
+Yalnızca aşağıdaki şemada tek bir JSON nesnesi döndür, başka metin yazma:
+{
+  "headline": "≤ 90 karakter; konuyu değil bulguyu söyleyen sade cümle veya soru",
+  "why_now": "1 cümle: yazarlar neye ve neden baktı",
+  "findings": ["2-3 madde; her biri ≤ 160 karakter ve yazıdaki bir sayıyı içerir"],
+  "so_what": "1-2 cümle: bu bulgu haberleri okuyan biri için ne anlama geliyor (tavsiye değil)",
+  "not_said": "1 cümle: yazının açıkça iddia etmediği şey",
+  "terms": [{"term": "terim", "meaning": "tek satırlık sade açıklama"}],
+  "quote": "yazıdan kelimesi kelimesine bir cümle",
+  "basis": "1 cümle: hangi veri veya yöntemle",
+  "topics": []
+}
+
+YAZI
+Kaynak: {{source_name}}
+Başlık: {{title}}
+Yazarlar: {{authors}}
+Tarih: {{published_at}}
+Kategori: {{category}}
+
+{{body_text}}
+"""

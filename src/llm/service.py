@@ -22,6 +22,7 @@ from src.llm.prompts import (
     OUTLOOK_PROMPT_TEMPLATE,
     PARTICIPANTS_PROMPT_TEMPLATE,
     QUOTE_CLEAN_PROMPT_TEMPLATE,
+    RESEARCH_DIGEST_PROMPT_TEMPLATE,
     SUMMARY_PROMPT_TEMPLATE,
 )
 
@@ -47,6 +48,7 @@ _EFFORT_SETTING_BY_PURPOSE = {
     "quote_clean": "MINIMAX_EFFORT_QUOTE_CLEAN",
     "participants": "MINIMAX_EFFORT_PARTICIPANTS",
     "market_inference": "MINIMAX_EFFORT_INFERENCE",
+    "research_digest": "MINIMAX_EFFORT_RESEARCH",
 }
 _USAGE_KEYS = ("calls", "prompt_tokens", "cached_tokens", "completion_tokens", "reasoning_tokens")
 
@@ -618,3 +620,27 @@ def generate_participants_json(
         },
     )
     return _call_llm_json(prompt, purpose="participants")
+
+
+def generate_research_digest_json(
+    *,
+    source_name: str,
+    title: str,
+    authors: str,
+    published_at: str,
+    category: str,
+    body_text: str,
+) -> dict[str, Any]:
+    """Plain-language digest of one research/blog post (research_watch job)."""
+    prompt = _replace_placeholders(
+        RESEARCH_DIGEST_PROMPT_TEMPLATE,
+        {
+            "source_name": source_name,
+            "title": title,
+            "authors": authors,
+            "published_at": published_at,
+            "category": category,
+            "body_text": body_text,
+        },
+    )
+    return _call_llm_json(prompt, purpose="research_digest")
