@@ -1,0 +1,32 @@
+src/classification/view_cues.py
+  s_775387728b658b::t_b8fc1e7ca8f328 1-111
+  s_775387728b658b::t_08da27e4991e87 112-141
+src/classification/outlook.py
+  s_775387728b658b::t_cc21774278050a 25,53-54,75,77-82,96-128,250,603-604
+src/ingestion/fill_missing_topics.py
+  s_775387728b658b::t_778f4b2a21ec66 17,47-61,75,88-95,98-99,104,125-128,145-184
+src/ingestion/service.py
+  s_775387728b658b::t_7764c724d54a47 1600-1604
+src/llm/prompts.py
+  s_775387728b658b::t_30a4f4e7c638c3 93-101
+tests/ingestion/test_fill_missing_topics.py
+  s_775387728b658b::t_9056170671fc08 370-437
+tests/outlook/test_outlook.py
+  s_775387728b658b::t_d3bec5a6d7d1dc 317-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95dfdf16d1020fb1913eb1a652d588c7582ad51c",
+  "prompts": {},
+  "sessions": {
+    "s_775387728b658b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "316bb921-380f-4202-8056-9512c072f2be",
+        "model": "claude-fable-5-2"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
