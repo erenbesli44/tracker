@@ -367,3 +367,71 @@ async def test_fill_post_claims_the_slot_before_returning(client: AsyncClient, m
         assert len(started) == 1
     finally:
         fill._state["running"] = False
+
+
+def _gold_aside() -> str:
+    import json
+
+    return json.dumps(
+        _segments(300)
+        + [
+            {"start": 1296.0, "duration": 4.0, "text": "bu ortamda altın spot altın"},
+            {"start": 1312.0, "duration": 4.0, "text": "4.500 dolara kadar çıkış bekliyorum"},
+        ]
+    )
+
+
+async def test_missed_instrument_scan_adds_only_the_flagged_instrument(
+    client: AsyncClient, session: Session, monkeypatch
+):
+    video_id, topics = await _video(client, session)
+    transcript = session.exec(select(Transcript).where(Transcript.video_id == video_id)).one()
+    transcript.segments_json = _gold_aside()
+    session.add(transcript)
+    session.commit()
+    before = _snapshot(session)
+    monkeypatch.setattr(llm_service, "_is_minimax_configured", lambda: True)
+    seen = {}
+
+    def analysis(**kw):
+        seen["transcript"] = kw["transcript"]
+        return _analysis()
+
+    monkeypatch.setattr(llm_service, "generate_analysis_json", analysis)
+    monkeypatch.setattr(llm_service, "generate_outlook_json", lambda **_: {"items": []})
+
+    video = session.get(Video, video_id)
+    assert fill.missed_instruments(session, video) == {"altin": 1296.0}
+    added = fill.fill_missed_instruments_safely(session, video)
+
+    # the re-analysis also returns enflasyon, petrol, bist…: only the flagged one is added
+    assert [a["topic"] for a in added] == ["altin"]
+    assert seen["transcript"].startswith("ANALYST NOTE:")
+    assert "altin (around 21:36)" in seen["transcript"]
+    after = _snapshot(session)
+    assert all(after[mid] == row for mid, row in before.items())
+    assert [r[0] for mid, r in after.items() if mid not in before] == [topics["altin"]]
+    # now complete: the scan is clean and makes no further call
+    assert fill.missed_instruments(session, session.get(Video, video_id)) == {}
+
+
+async def test_missed_instrument_scan_makes_no_call_when_clean_and_never_raises(
+    client: AsyncClient, session: Session, monkeypatch
+):
+    video_id, _ = await _video(client, session)
+    calls = []
+
+    def boom(**_kw):
+        calls.append(1)
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(llm_service, "_is_minimax_configured", lambda: True)
+    monkeypatch.setattr(llm_service, "generate_analysis_json", boom)
+    video = session.get(Video, video_id)
+    assert fill.fill_missed_instruments_safely(session, video) == [] and calls == []
+
+    transcript = session.exec(select(Transcript).where(Transcript.video_id == video_id)).one()
+    transcript.segments_json = _gold_aside()
+    session.add(transcript)
+    session.commit()
+    assert fill.fill_missed_instruments_safely(session, video) == [] and calls == [1]

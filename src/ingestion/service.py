@@ -1597,6 +1597,11 @@ def _ingest_youtube_pipeline(
 
     if classification_action in ("created", "replaced") and llm_service._is_minimax_configured():
         outlook_service.classify_video_safely(session, video)
+        # A short forward view can get no mention from the analysis (e.g. a 25-second altın
+        # target at the end of a BIST video): scan for it and complete the video.
+        from src.ingestion import fill_missing_topics  # noqa: PLC0415 — circular import
+
+        fill_missing_topics.fill_missed_instruments_safely(session, video)
 
     if summary is not None and summary_action in ("created", "updated"):
         session.refresh(summary)
