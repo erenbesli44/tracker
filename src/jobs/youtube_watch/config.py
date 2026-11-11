@@ -60,6 +60,9 @@ def load_watch_config(path: str | None = None) -> WatchConfig:
                 transcript_languages=list(
                     entry.get("transcript_languages") or defaults.transcript_languages
                 ),
+                exclude_title_contains=[
+                    str(p) for p in (entry.get("exclude_title_contains") or []) if str(p).strip()
+                ],
             )
         )
 

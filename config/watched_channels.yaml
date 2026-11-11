@@ -1,6 +1,8 @@
 # YouTube channels to watch daily.
 # Each entry needs either youtube_channel_id (UC...) or handle (@...).
 # video_count: how many recent videos to check per run.
+# exclude_title_contains: optional; videos whose title contains any of these
+#   (case-insensitive) are skipped entirely - no transcript, summary or views.
 
 defaults:
   video_count: 5
@@ -40,6 +42,8 @@ channels:
   - handle: "@ncminvest-tr"
     name: "NCM Investment"
     video_count: 4
+    # Daily morning market-open recap: not tracked (owner 2026-11-10).
+    exclude_title_contains: ["Seans Başlarken"]
   - handle: "@IntegralForexTV"
     name: "Integral Forextv"
     video_count: 4

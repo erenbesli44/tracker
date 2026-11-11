@@ -73,6 +73,7 @@ class IngestionYoutubeChannelRunRequest(CustomModel):
     youtube_channel: str = Field(min_length=1, max_length=500)
     video_count: int = Field(default=3, ge=1, le=20)
     transcript_languages: list[str] | None = None
+    exclude_title_contains: list[str] = Field(default_factory=list)
 
 
 class IngestionActionResponse(CustomModel):
@@ -103,6 +104,7 @@ class IngestionYoutubeChannelRunVideoResult(CustomModel):
         "skipped_existing",
         "skipped_transcript_unavailable",
         "skipped_live",
+        "skipped_excluded",
         "failed",
     ]
     video_id: int | None = None
@@ -118,5 +120,6 @@ class IngestionYoutubeChannelRunResponse(CustomModel):
     videos_skipped_existing: int
     videos_skipped_no_transcript: int
     videos_skipped_live: int = 0
+    videos_skipped_excluded: int = 0
     errors_count: int
     results: list[IngestionYoutubeChannelRunVideoResult]

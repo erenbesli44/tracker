@@ -1843,10 +1843,31 @@ def ingest_youtube_channel(
     videos_skipped_existing = 0
     videos_skipped_no_transcript = 0
     videos_skipped_live = 0
+    videos_skipped_excluded = 0
     errors_count = 0
     results: list[IngestionYoutubeChannelRunVideoResult] = []
+    exclude_patterns = [p.casefold() for p in data.exclude_title_contains]
 
     for candidate in candidates:
+        title = (candidate.title or "").casefold()
+        matched = next((p for p in exclude_patterns if p in title), None)
+        if matched is not None:
+            # Excluded shows (e.g. a channel's daily market-open recap) are never
+            # stored, transcribed, summarised or classified - not even backfilled.
+            logger.info(
+                "Excluded by title: video_id=%s title=%r", candidate.video_id, candidate.title
+            )
+            videos_skipped_excluded += 1
+            results.append(
+                IngestionYoutubeChannelRunVideoResult(
+                    youtube_video_id=candidate.video_id,
+                    video_url=candidate.video_url,
+                    status="skipped_excluded",
+                    detail=f"Title matches excluded pattern {matched!r}.",
+                )
+            )
+            continue
+
         video_metadata = _playlist_video_metadata(channel_id, playlist_info, candidate)
         existing_video = videos_service.get_by_video_id(session, candidate.video_id)
         if existing_video is None:
@@ -2078,6 +2099,7 @@ def ingest_youtube_channel(
         videos_skipped_existing=videos_skipped_existing,
         videos_skipped_no_transcript=videos_skipped_no_transcript,
         videos_skipped_live=videos_skipped_live,
+        videos_skipped_excluded=videos_skipped_excluded,
         errors_count=errors_count,
         results=results,
     )

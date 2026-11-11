@@ -138,6 +138,7 @@ def _process_channel(engine: Engine, watched: WatchedChannel) -> ChannelJobResul
             youtube_channel=watched.identifier,
             video_count=watched.video_count,
             transcript_languages=watched.transcript_languages,
+            exclude_title_contains=watched.exclude_title_contains,
         )
         with Session(engine) as session:
             result = ingestion_service.ingest_youtube_channel(session, request)
@@ -146,6 +147,7 @@ def _process_channel(engine: Engine, watched: WatchedChannel) -> ChannelJobResul
             result.videos_skipped_existing
             + result.videos_skipped_no_transcript
             + result.videos_skipped_live
+            + result.videos_skipped_excluded
         )
         error_detail: str | None = None
         if result.errors_count > 0:

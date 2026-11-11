@@ -20,6 +20,8 @@ class WatchedChannel:
     handle: str | None = None
     video_count: int = 5
     transcript_languages: list[str] = field(default_factory=lambda: ["tr", "en"])
+    # Videos whose title contains any of these (case-insensitive) are never ingested.
+    exclude_title_contains: list[str] = field(default_factory=list)
 
     @property
     def identifier(self) -> str:
