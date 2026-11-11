@@ -22,7 +22,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
-from src.classification import quote_clean
+from src.classification import quote_clean, view_cues
 from src.classification.models import TopicMention
 from src.llm import service as llm_service
 from src.llm.prompts import OUTLOOK_PROMPT_VERSION, PARTICIPANTS_PROMPT_VERSION
@@ -50,6 +50,8 @@ _VALID = {"up", "down", "flat", "none"}
 _TIMES = {"future", "present", "past"}
 _WINDOW_PAD_SECONDS = 45
 _EXCERPT_MAX_CHARS = 3500
+_CHUNK_CHARS = 450  # about 30 s of speech
+_ANCHORED_MAX_CHARS = 700
 _QUOTE_MAX_CHARS = 240
 
 
@@ -70,8 +72,14 @@ def transcript_excerpt(
     segments: list[dict[str, Any]] | None,
     start_time: str | None,
     end_time: str | None,
+    slug: str | None = None,
 ) -> str:
-    """Transcript text inside the mention's time window (padded), capped."""
+    """Transcript text inside the mention's time window (padded), capped.
+
+    A window longer than the cap is not cut at its head: the first chunk stays and the rest
+    is chosen by forward-view cues (``view_cues.rank_chunks``), joined with " … " where
+    text was left out. ``slug`` adds weight to chunks that name the instrument.
+    """
     if not segments:
         return ""
     start = _seconds(start_time)
@@ -85,8 +93,39 @@ def transcript_excerpt(
         for s in segments
         if lo <= float(s.get("start", 0.0)) <= hi
     ]
-    text = " ".join(w for w in words if w)
-    return text[:_EXCERPT_MAX_CHARS]
+    words = [w for w in words if w]
+    text = " ".join(words)
+    # The same instrument named next to a commitment elsewhere in the video (a closing
+    # recap, an aside in another section) is appended after the window.
+    extra = view_cues.anchored_passages(segments, slug, lo, hi, _ANCHORED_MAX_CHARS)
+    if extra:
+        text_cap = _EXCERPT_MAX_CHARS - len(extra) - 3
+        return f"{_window_text(words, text, text_cap, slug)} … {extra}"
+    return _window_text(words, text, _EXCERPT_MAX_CHARS, slug)
+
+
+def _window_text(words: list[str], text: str, cap: int, slug: str | None) -> str:
+    if len(text) <= cap:
+        return text
+
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for word in words:
+        current.append(word)
+        size += len(word) + 1
+        if size >= _CHUNK_CHARS:
+            chunks.append(" ".join(current))
+            current, size = [], 0
+    if current:
+        chunks.append(" ".join(current))
+    keep = view_cues.rank_chunks(chunks, cap, slug)
+    parts: list[str] = []
+    for pos, i in enumerate(keep):
+        if pos and i != keep[pos - 1] + 1:
+            parts.append("…")
+        parts.append(chunks[i])
+    return " ".join(parts)[:cap]
 
 
 def _strip_topic_prefix(summary: str) -> str:
@@ -208,7 +247,7 @@ def classify_video(
         videos_service.parse_transcript_segments(transcript.segments_json) if transcript else None
     )
     items = [
-        (m, INSTRUMENTS[t.slug], transcript_excerpt(segments, m.start_time, m.end_time))
+        (m, INSTRUMENTS[t.slug], transcript_excerpt(segments, m.start_time, m.end_time, t.slug))
         for m, t in rows
     ]
     speaker = video.title or ""
@@ -561,7 +600,8 @@ def run_clean_quote_backfill(engine, *, limit: int) -> None:
                         else []
                     )
                 excerpt = transcript_excerpt(
-                    segments_by_video[mention.video_id], mention.start_time, mention.end_time
+                    segments_by_video[mention.video_id], mention.start_time, mention.end_time,
+                    topic.slug,
                 )
                 items.append((mention, INSTRUMENTS.get(topic.slug, topic.name), excerpt))
 

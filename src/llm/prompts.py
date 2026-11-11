@@ -90,6 +90,15 @@ CLASSIFICATION RULES (strict)
    discusses a subtopic (confidence >= 0.40) include it, even if the
    channel's expected list does not mention it.
 
+4b. A SHORT VIEW IS ENOUGH: when the speaker states a forward-looking price expectation,
+   target or level for one of the tradable instruments (bist-turk-piyasalari, altin, gumus,
+   doviz-kur, kripto-paralar, amerikan-piyasalari, petrol-enerji), create a topic_segment
+   for that instrument even if it is a single sentence or a 20-second aside near the end of
+   the video (e.g. "altında 4.500 dolara kadar çıkış bekliyorum", "yıl sonuna kadar boğa
+   bekliyorum"). Give it confidence >= 0.50 and put the expectation in its summary. For
+   these segments confidence reflects how clearly the expectation is stated, not how long
+   the instrument is discussed. This rule never applies to the opening teaser (rule 6).
+
 5. Capture EVERY numeric level the speaker names — price targets, support/
    resistance, percentages, durations, index levels. Put them in `key_levels`
    as short strings (e.g. "60 dolar", "%20", "3-6 ay", "4.700").

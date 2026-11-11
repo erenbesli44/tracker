@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func
 from sqlmodel import Session, select
 
-from src.classification import outlook
+from src.classification import outlook, view_cues
 from src.classification import service as classification_service
 from src.classification.models import TopicMention
 from src.ingestion import service as ingestion_service
@@ -44,7 +44,21 @@ def candidate_video_ids(session: Session, days: int, limit: int) -> list[int]:
     return list(session.exec(stmt).all())
 
 
-def _analysis_payload(session: Session, video: Video, transcript: Transcript) -> dict:
+def _focus_note(missed: dict[str, float]) -> str:
+    """Hint for the re-analysis: which instruments an earlier pass left out, and where."""
+    where = ", ".join(
+        f"{slug} (around {int(t // 60):02d}:{int(t % 60):02d})" for slug, t in missed.items()
+    )
+    return (
+        "ANALYST NOTE: an earlier pass produced no topic_segment for these instruments, "
+        f"although the transcript has a forward-looking statement about them: {where}. "
+        "Check those passages and apply rule 4b.\n\n"
+    )
+
+
+def _analysis_payload(
+    session: Session, video: Video, transcript: Transcript, *, focus_note: str = ""
+) -> dict:
     channel = None
     if video.channel_id is not None:
         from src.channels.models import YouTubeChannel
@@ -58,7 +72,7 @@ def _analysis_payload(session: Session, video: Video, transcript: Transcript) ->
         video_title=video.title or "unknown",
         published_at=video.published_at.isoformat() if video.published_at else "unknown",
         source_url=videos_service.canonicalize_youtube_url(video.video_url),
-        transcript=ingestion_service._prepare_transcript_for_llm(
+        transcript=focus_note + ingestion_service._prepare_transcript_for_llm(
             transcript.raw_text,
             transcript_segments=videos_service.parse_transcript_segments(
                 transcript.segments_json
@@ -71,15 +85,23 @@ def _analysis_payload(session: Session, video: Video, transcript: Transcript) ->
     )
 
 
-def fill_video(session: Session, video: Video, *, dry_run: bool = False) -> list[dict]:
+def fill_video(
+    session: Session,
+    video: Video,
+    *,
+    dry_run: bool = False,
+    only_slugs: set[str] | None = None,
+    focus_note: str = "",
+) -> list[dict]:
     """Add mentions for topics the video lacks.
 
-    Returns [{topic, confidence}] for the mentions added (or that would be).
+    ``only_slugs`` limits the new mentions to those topics. Returns [{topic, confidence}]
+    for the mentions added (or that would be).
     """
     transcript = session.exec(select(Transcript).where(Transcript.video_id == video.id)).first()
     if transcript is None or not transcript.raw_text.strip():
         return []
-    payload = _analysis_payload(session, video, transcript)
+    payload = _analysis_payload(session, video, transcript, focus_note=focus_note)
     # No 5-mention cap here: the cap is what dropped topics in the first place.
     classification = ingestion_service._classification_from_llm_payload(
         session, payload, max_mentions=None
@@ -100,6 +122,10 @@ def fill_video(session: Session, video: Video, *, dry_run: bool = False) -> list
             select(Topic).where(Topic.id.in_([m.topic_id for m in items]))
         ).all()
     }
+    if only_slugs is not None:
+        items = [m for m in items if slugs[m.topic_id] in only_slugs]
+        if not items:
+            return []
     added = [{"topic": slugs[m.topic_id], "confidence": m.confidence} for m in items]
     if dry_run:
         return added
@@ -114,6 +140,46 @@ def fill_video(session: Session, video: Video, *, dry_run: bool = False) -> list
             session.rollback()
             logger.warning("Outlook failed for new mentions video_id=%s", video.id, exc_info=True)
     return added
+
+
+def missed_instruments(session: Session, video: Video) -> dict[str, float]:
+    """Tracked instruments with a forward statement in the transcript but no mention."""
+    transcript = session.exec(select(Transcript).where(Transcript.video_id == video.id)).first()
+    if transcript is None:
+        return {}
+    existing = set(
+        session.exec(
+            select(Topic.slug)
+            .join(TopicMention, TopicMention.topic_id == Topic.id)
+            .where(TopicMention.video_id == video.id)
+        ).all()
+    )
+    if not existing:
+        return {}  # no analysis yet (or a summary-only channel): nothing to complete
+    return view_cues.missed_instruments(
+        videos_service.parse_transcript_segments(transcript.segments_json), existing
+    )
+
+
+def fill_missed_instruments_safely(session: Session, video: Video) -> list[dict]:
+    """Ingestion hook: one hinted re-analysis when the cue scan finds an instrument view
+    the first pass gave no mention. Never raises; costs nothing when the scan is clean."""
+    try:
+        missed = missed_instruments(session, video)
+        if not missed:
+            return []
+        added = fill_video(
+            session, video, only_slugs=set(missed), focus_note=_focus_note(missed)
+        )
+        logger.info(
+            "Missed-instrument scan video_id=%s flagged=%s added=%s",
+            video.id, sorted(missed), [a["topic"] for a in added],
+        )
+        return added
+    except Exception:  # noqa: BLE001 — ingestion must not fail on this step
+        session.rollback()
+        logger.warning("Missed-instrument fill failed video_id=%s", video.id, exc_info=True)
+        return []
 
 
 _lock = threading.Lock()

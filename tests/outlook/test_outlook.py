@@ -314,3 +314,71 @@ async def test_backfill_reports_missing_contract(
     body = (await client.get("/outlook/backfill")).json()
     assert body["run"]["missing_contract"] == 1
     assert body["coverage"]["explicit"] == 0
+
+
+def _talk(n: int, start: float = 0.0) -> list[dict]:
+    return [
+        {"start": start + i * 4.0, "text": f"piyasada bugün olanları anlatıyorum {i:03d}"}
+        for i in range(n)
+    ]
+
+
+def test_long_window_keeps_the_view_stated_far_from_its_start():
+    # A mention that spans the whole video: the view comes ten minutes in (Bora Özkent,
+    # 11 Nov 2026). The head-only excerpt never showed it to the model.
+    segments = _talk(160)
+    segments[150]["text"] = "an itibariyle ben hala yıl sonuna kadar boğa bekliyorum"
+    text = outlook.transcript_excerpt(segments, "00:54", "11:15", "amerikan-piyasalari")
+    assert "yıl sonuna kadar boğa bekliyorum" in text
+    assert text.startswith("piyasada bugün olanları anlatıyorum 003")  # head is kept
+    assert "…" in text and len(text) <= 3500
+
+
+def test_long_window_without_cues_keeps_its_head():
+    segments = _talk(160)
+    text = outlook.transcript_excerpt(segments, "00:54", "11:15", "altin")
+    assert "…" not in text
+    assert text.startswith("piyasada bugün olanları anlatıyorum 003")
+    assert "anlatıyorum 150" not in text
+
+
+def test_missed_instruments_finds_a_short_view_without_a_mention():
+    from src.classification import view_cues
+
+    # Atilla Yeşilada, 11 Nov 2026: 25 seconds on altın at the end of a BIST video.
+    segments = _talk(300) + [
+        {"start": 1296.0, "text": "İnanmayacağın bir şey söyleyeceğim. Altın"},
+        {"start": 1298.0, "text": "bu ortamda altın spot altın."},
+        {"start": 1307.0, "text": "sabah baktığımda 4100 doların altına kaymıştı ons altın."},
+        {"start": 1312.0, "text": "Evet. 4.500 dolara kadar çıkış bekliyorum"},
+    ]
+    assert view_cues.missed_instruments(segments, {"bist-turk-piyasalari"}) == {"altin": 1296.0}
+    assert view_cues.missed_instruments(segments, {"bist-turk-piyasalari", "altin"}) == {}
+
+
+def test_missed_instruments_ignores_teaser_units_and_plain_mentions():
+    from src.classification import view_cues
+
+    segments = [
+        # opening teaser: the same words, but inside the first 90 seconds
+        {"start": 16.0, "text": "Altın bu ortamda altın spot altın çıkış bekliyorum"},
+        # "altına / altında" = below, "dolar" = a price unit: not instrument words
+        {"start": 400.0, "text": "endeks 11.600'ün altına inerse satış bekliyorum 90 dolar"},
+        # the instrument is named, nobody commits to anything
+        {"start": 700.0, "text": "gümüş dün yüzde dört düştü"},
+    ]
+    assert view_cues.missed_instruments(segments, set()) == {}
+
+
+def test_excerpt_appends_a_recap_of_the_instrument_outside_the_window():
+    segments = _talk(300)
+    segments[40]["text"] = "ons altın dün yüzde iki düştü"
+    segments[280]["text"] = "özetle ons altın için 4.500 dolara kadar çıkış bekliyorum"
+    text = outlook.transcript_excerpt(segments, "02:30", "03:30", "altin")
+    assert "ons altın dün yüzde iki düştü" in text
+    assert text.endswith("anlatıyorum 287") and "çıkış bekliyorum" in text
+    assert " … " in text and len(text) <= 3500
+    # another instrument's window does not get the altın recap
+    assert "çıkış bekliyorum" not in outlook.transcript_excerpt(
+        segments, "02:30", "03:30", "gumus"
+    )
