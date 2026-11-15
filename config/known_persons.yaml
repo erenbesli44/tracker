@@ -103,6 +103,16 @@ persons:
       - "bora özkent"
       - "bora ozkent"
 
+  - name: "Tom Lee"
+    slug: "tom-lee"
+    aliases:
+      - "tom lee"
+
+  - name: "Joseph Carlson"
+    slug: "joseph-carlson"
+    aliases:
+      - "joseph carlson"
+
 # channel_defaults: handle (lowercased, without @) → person slug.
 # Used when no alias is found in the video title — i.e. single-host channels.
 channel_defaults:
@@ -128,6 +138,8 @@ channel_defaults:
   "boraozkentlenasdaq": "bora-ozkent"
   "cevikfinance": "cuma-cevik"
   "yatirim101": "yatirim-101"
+  "fundstratcapital": "tom-lee"
+  "josephcarlsonafterhours": "joseph-carlson"
 
 # multi_guest_channels: handles (lowercased, without @) of channels that host
 # different guests. Their videos get per-video participants and every view is
