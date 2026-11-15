@@ -1,0 +1,29 @@
+config/known_persons.yaml
+  s_b18fce9e689cd8::t_61fe98d59d627f 106-115,141-142
+config/watched_channels.yaml
+  s_b18fce9e689cd8::t_0f4173efddf35c 62-74
+src/ingestion/fill_missing_topics.py
+  s_b18fce9e689cd8::t_978bf13c860a8f 20,82
+src/ingestion/service.py
+  s_b18fce9e689cd8::t_30ba0a7ec43678 850-851,866
+tests/ingestion/test_english_transcript_turkish_summary.py
+  s_b18fce9e689cd8::t_c48ba0fd6db20e 1-51
+tests/videos/test_title_exclusion.py
+  s_b18fce9e689cd8::t_f622ec803f9cce 80-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "add380f72f27406db5729ee842ff7afae229a41d",
+  "prompts": {},
+  "sessions": {
+    "s_b18fce9e689cd8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1252c42e-fa1e-47bf-a399-063fb01943b5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "EREN BESLI <eren.besli@turkcell.com.tr>"
+    }
+  }
+}
