@@ -59,6 +59,19 @@ channels:
   - handle: "@boraozkentlenasdaq"
     name: "Bora Özkent"
     video_count: 4
+  # US-market voices, English transcripts (owner 2026-11-15). Summaries come out in Turkish
+  # (LLM_DEFAULT_OUTPUT_LANGUAGE); X clips use the Turkish dub + subtitle format.
+  - handle: "@FundstratCapital"
+    name: "Fundstrat Capital"
+    video_count: 2
+    transcript_languages: ["en"]
+    # ETF rebalance notes carry no market view.
+    exclude_title_contains: ["Rebalance"]
+  # Joseph Carlson's active channel; the main @josephcarlsonshow posts about once a month.
+  - handle: "@JosephCarlsonAfterHours"
+    name: "Joseph Carlson After Hours"
+    video_count: 3
+    transcript_languages: ["en"]
   # Summary only (config/known_persons.yaml summary_only_channels): no instrument views.
   - handle: "@Kayitdisi"
     name: "Kayıt Dışı İktisat"

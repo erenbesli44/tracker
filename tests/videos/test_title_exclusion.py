@@ -77,5 +77,7 @@ def test_watch_config_excludes_ncm_seans_baslarken():
     config = load_watch_config("config/watched_channels.yaml")
     ncm = next(c for c in config.channels if c.handle == "@ncminvest-tr")
     assert ncm.exclude_title_contains == ["Seans Başlarken"]
-    others = [c for c in config.channels if c.handle != "@ncminvest-tr"]
+    fundstrat = next(c for c in config.channels if c.handle == "@FundstratCapital")
+    assert fundstrat.exclude_title_contains == ["Rebalance"]  # ETF notes, owner 2026-11-15
+    others = [c for c in config.channels if c.handle not in ("@ncminvest-tr", "@FundstratCapital")]
     assert all(c.exclude_title_contains == [] for c in others)

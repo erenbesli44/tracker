@@ -847,7 +847,8 @@ def _auto_fill_missing_analytics_for_new_video(
             published_at=llm_meta["published_at"],
             source_url=llm_meta["source_url"],
             transcript=llm_transcript,
-            output_language=transcript_language,
+            # The site is Turkish: an English transcript still gets a Turkish summary.
+            output_language=settings.LLM_DEFAULT_OUTPUT_LANGUAGE,
             channel_primary_topic=llm_meta["channel_primary_topic"],
         )
         logger.info("LLM analysis generated for video_url=%s", llm_meta["source_url"])
@@ -862,7 +863,7 @@ def _auto_fill_missing_analytics_for_new_video(
     if needs_summary:
         data.summary = _summary_from_llm_payload(
             llm_payload,
-            transcript_language=transcript_language,
+            transcript_language=settings.LLM_DEFAULT_OUTPUT_LANGUAGE,
         )
 
     if needs_classification:

@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 from src.classification import outlook, view_cues
 from src.classification import service as classification_service
 from src.classification.models import TopicMention
+from src.config import settings
 from src.ingestion import service as ingestion_service
 from src.llm import service as llm_service
 from src.models import utc_now
@@ -78,7 +79,7 @@ def _analysis_payload(
                 transcript.segments_json
             ),
         ),
-        output_language=transcript.language,
+        output_language=settings.LLM_DEFAULT_OUTPUT_LANGUAGE,
         channel_primary_topic=ingestion_service._normalize_main_topic_slug(
             (getattr(channel, "primary_topic_slug", None) or "") if channel else ""
         ),
