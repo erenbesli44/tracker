@@ -72,10 +72,10 @@ channels:
     name: "Joseph Carlson After Hours"
     video_count: 3
     transcript_languages: ["en"]
-  # Summary only (config/known_persons.yaml summary_only_channels): no instrument views.
-  - handle: "@Kayitdisi"
-    name: "Kayıt Dışı İktisat"
-    video_count: 4
+  # Retired 2026-11-18 (owner): Kayıt Dışı İktisat no longer tracked.
+ #- handle: "@Kayitdisi"
+ #  name: "Kayıt Dışı İktisat"
+ #  video_count: 4
  #- handle: "@EmreŞİRİNileBorsaveFinans"
  #  name: "Emre Şirin"
  #  video_count: 4
