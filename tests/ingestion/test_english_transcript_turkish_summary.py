@@ -20,6 +20,7 @@ def _analysis(**_kw) -> dict:
 def test_us_channels_have_default_persons():
     assert detector.detect_channel_default("@FundstratCapital") == "tom-lee"
     assert detector.detect_channel_default("@JosephCarlsonAfterHours") == "joseph-carlson"
+    assert detector.detect_channel_default("@PeterSchiff") == "peter-schiff"
 
 
 async def test_english_transcript_gets_turkish_summary(client: AsyncClient, monkeypatch):
