@@ -72,6 +72,12 @@ channels:
     name: "Joseph Carlson After Hours"
     video_count: 3
     transcript_languages: ["en"]
+  # Peter Schiff (owner 2026-11-21): gold, dollar, US inflation/debt views; ~1 h episodes,
+  # English transcripts, Turkish summaries; X clips use the Turkish dub + subtitle format.
+  - handle: "@PeterSchiff"
+    name: "Peter Schiff"
+    video_count: 2
+    transcript_languages: ["en"]
   # Retired 2026-11-18 (owner): Kayıt Dışı İktisat no longer tracked.
  #- handle: "@Kayitdisi"
  #  name: "Kayıt Dışı İktisat"

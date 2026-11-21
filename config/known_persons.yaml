@@ -113,6 +113,11 @@ persons:
     aliases:
       - "joseph carlson"
 
+  - name: "Peter Schiff"
+    slug: "peter-schiff"
+    aliases:
+      - "peter schiff"
+
 # channel_defaults: handle (lowercased, without @) → person slug.
 # Used when no alias is found in the video title — i.e. single-host channels.
 channel_defaults:
@@ -140,6 +145,7 @@ channel_defaults:
   "yatirim101": "yatirim-101"
   "fundstratcapital": "tom-lee"
   "josephcarlsonafterhours": "joseph-carlson"
+  "peterschiff": "peter-schiff"
 
 # multi_guest_channels: handles (lowercased, without @) of channels that host
 # different guests. Their videos get per-video participants and every view is
